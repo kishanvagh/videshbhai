@@ -1,0 +1,1 @@
+{"success":false,"message":"Validation failed","errors":[{"field":"name","message":"Name is required","value":""},{"field":"email","message":"Please provide a valid email"},{"field":"password","message":"Password must be at least 6 characters long"}]}
