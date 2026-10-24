@@ -1,7 +1,15 @@
 import axios from 'axios';
 
+// Normalize the API base URL so that whether the deploy env var is set to
+// "https://api.example.com" or "https://api.example.com/api", requests always
+// hit the correct "/api" route prefix. Without this, a base URL missing the
+// "/api" segment makes every call (e.g. /auth/register) hit a non-existent
+// path and the backend replies "Route ... not found".
+const rawBaseURL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/+$/, '');
+const BASE_URL = rawBaseURL.endsWith('/api') ? rawBaseURL : `${rawBaseURL}/api`;
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api',
+  baseURL: BASE_URL,
   headers: { 'Content-Type': 'application/json' },
 });
 

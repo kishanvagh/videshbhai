@@ -25,3 +25,7 @@ Thumbs.db
 # Misc test/diagnostic artifacts (if any present)
 *.out.cjs
 *.dump.txt
+full_payments.txt
+reg.json
+token_out.txt
+server_tmp.txt

@@ -110,7 +110,8 @@ and `CORS_ORIGIN` in the service's **Environment** tab (they're marked `sync: fa
    |---|---|
    | `VITE_API_BASE_URL` | `https://<service-name>.onrender.com/api` |
 
-   > Must be `http(s)://…/api` — no trailing slash.
+   > Must be `http(s)://…/api`. If you omit the `/api` segment, the app now
+   > automatically appends it — but setting it exactly with `/api` is recommended.
 5. Click **Deploy**.
 6. Note your production URL: `https://<project>.vercel.app`
    (Vercel already handles SPA routing via `frontend/vercel.json`, so
