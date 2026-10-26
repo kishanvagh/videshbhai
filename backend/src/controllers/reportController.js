@@ -86,7 +86,9 @@ const getOutstandingReport = async (req, res, next) => {
     const result = [];
     for (const sale of sales) {
       const outstanding = await accountingService.getSaleOutstanding(sale._id);
-      if (outstanding.outstandingForeign > 0.01 || outstanding.outstandingINR > 0.01) {
+      // Only include invoices with an outstanding foreign-currency balance.
+      // INR-only outstanding is excluded per business requirement.
+      if (outstanding.outstandingForeign > 0.01) {
         result.push({ sale, outstanding });
       }
     }
@@ -106,6 +108,10 @@ const getProfitReport = async (req, res, next) => {
       if (req.query.startDate) matchFilter.saleDate.$gte = new Date(req.query.startDate);
       if (req.query.endDate) matchFilter.saleDate.$lte = new Date(req.query.endDate);
     }
+    // Apply party filter if provided
+    if (req.query.party) {
+      matchFilter.party = new mongoose.Types.ObjectId(req.query.party);
+    }
 
     const profitByParty = await Sale.aggregate([
       { $match: matchFilter },
@@ -120,16 +126,22 @@ const getProfitReport = async (req, res, next) => {
         }
       },
       { $lookup: { from: 'parties', localField: '_id', foreignField: '_id', as: 'party' } },
-      { $unwind: { path: '$party', preserveNullAndEmpty: true } },
+      // FIX: correct option is preserveNullAndEmptyArrays (was preserveNullAndEmpty which is invalid
+      // and caused $unwind to silently drop all documents)
+      { $unwind: { path: '$party', preserveNullAndEmptyArrays: true } },
       { $sort: { totalProfitForeign: -1 } }
     ]);
 
-    const totalProfitINR = profitByParty.reduce((s, x) => decimal.add(s, x.totalProfitINR), 0);
-    const totalProfitUSD = profitByParty.reduce((s, x) => decimal.add(s, x.totalProfitForeign), 0);
+    const totalProfitINR = profitByParty.reduce((s, x) => decimal.add(s, x.totalProfitINR || 0), 0);
+    const totalProfitUSD = profitByParty.reduce((s, x) => decimal.add(s, x.totalProfitForeign || 0), 0);
+    const totalSalesINR = profitByParty.reduce((s, x) => decimal.add(s, x.totalSalesINR || 0), 0);
+    const totalSalesForeign = profitByParty.reduce((s, x) => decimal.add(s, x.totalSalesForeign || 0), 0);
     return success(res, {
       profitByParty,
       totalProfitINR: decimal.round2(totalProfitINR),
-      totalProfitUSD: decimal.round2(totalProfitUSD)
+      totalProfitUSD: decimal.round2(totalProfitUSD),
+      totalSalesINR: decimal.round2(totalSalesINR),
+      totalSalesForeign: decimal.round2(totalSalesForeign)
     });
   } catch (err) { next(err); }
 };

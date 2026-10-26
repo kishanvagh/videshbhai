@@ -22,12 +22,14 @@ export default function Reports() {
   const [reportType, setReportType] = useState('sales');
   const [filters, setFilters] = useState({ startDate: '', endDate: '', party: '', currency: '' });
   const [generated, setGenerated] = useState(false);
+  // A counter that forces React Query to re-fetch even when filters haven't changed
+  const [fetchKey, setFetchKey] = useState(0);
 
   const { data: partiesData } = useQuery({ queryKey: ['parties-list'], queryFn: () => getParties({ limit: 200 }) });
   const parties = partiesData?.data?.data?.parties || partiesData?.data?.parties || [];
 
   const reportQuery = useQuery({
-    queryKey: ['report', reportType, filters],
+    queryKey: ['report', reportType, filters, fetchKey],
     queryFn: async () => {
       const params = { ...filters };
       if (reportType === 'sales') return getSalesReport(params);
@@ -39,11 +41,12 @@ export default function Reports() {
       return null;
     },
     enabled: generated,
+    staleTime: 0,
   });
 
   const handleGenerate = () => {
-    setGenerated(false);
-    setTimeout(() => setGenerated(true), 50);
+    setFetchKey(k => k + 1);
+    setGenerated(true);
   };
 
   const handleExport = async () => {
@@ -207,46 +210,100 @@ export default function Reports() {
 
                 {/* Outstanding */}
                 {reportType === 'outstanding' && rd && (
-                  <table className="w-full text-sm">
-                    <thead><tr className="border-b"><th className="text-left py-2 px-3 text-gray-500">Invoice</th><th className="text-left py-2 px-3 text-gray-500">Date</th><th className="text-left py-2 px-3 text-gray-500">Party</th><th className="text-left py-2 px-3 text-gray-500">Product</th><th className="text-right py-2 px-3 text-gray-500">Outstanding INR</th><th className="text-right py-2 px-3 text-gray-500">Outstanding Foreign</th><th className="text-left py-2 px-3 text-gray-500">Status</th></tr></thead>
-                    <tbody>
-                      {rd.invoices?.map(({ sale, outstanding }) => (
-                        <tr key={sale._id} className="border-b border-gray-50 hover:bg-gray-50">
-                          <td className="py-2 px-3 font-mono text-xs">{sale.invoiceNumber}</td>
-                          <td className="py-2 px-3">{formatDate(sale.saleDate)}</td>
-                          <td className="py-2 px-3">{sale.party?.name}</td>
-                          <td className="py-2 px-3">{sale.productName}</td>
-                          <td className="py-2 px-3 text-right text-amber-600 font-semibold">{formatCurrency(outstanding.outstandingINR, 'INR')}</td>
-                          <td className="py-2 px-3 text-right text-amber-600 font-semibold">{outstanding.outstandingForeign > 0.01 ? formatCurrency(outstanding.outstandingForeign, sale.foreignCurrency) : '-'}</td>
-                          <td className="py-2 px-3"><span className={`text-xs px-2 py-0.5 rounded-full font-medium ${sale.status === 'partial' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>{sale.status}</span></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  <>
+                    {rd.invoices?.length === 0 ? (
+                      <p className="text-center text-gray-400 py-8">No outstanding foreign-currency invoices found.</p>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b">
+                              <th className="text-left py-2 px-3 text-gray-500">Invoice</th>
+                              <th className="text-left py-2 px-3 text-gray-500">Date</th>
+                              <th className="text-left py-2 px-3 text-gray-500">Party</th>
+                              <th className="text-left py-2 px-3 text-gray-500">Product</th>
+                              <th className="text-right py-2 px-3 text-gray-500">Sale Amount</th>
+                              <th className="text-right py-2 px-3 text-gray-500">Outstanding</th>
+                              <th className="text-left py-2 px-3 text-gray-500">Currency</th>
+                              <th className="text-left py-2 px-3 text-gray-500">Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {rd.invoices?.map(({ sale, outstanding }) => (
+                              <tr key={sale._id} className="border-b border-gray-50 hover:bg-gray-50">
+                                <td className="py-2 px-3 font-mono text-xs">{sale.invoiceNumber}</td>
+                                <td className="py-2 px-3">{formatDate(sale.saleDate)}</td>
+                                <td className="py-2 px-3">{sale.party?.name}</td>
+                                <td className="py-2 px-3">{sale.productName}</td>
+                                <td className="py-2 px-3 text-right">{formatCurrency(outstanding.totalSaleForeign, sale.foreignCurrency)}</td>
+                                <td className="py-2 px-3 text-right text-amber-600 font-semibold">{formatCurrency(outstanding.outstandingForeign, sale.foreignCurrency)}</td>
+                                <td className="py-2 px-3 font-medium">{sale.foreignCurrency}</td>
+                                <td className="py-2 px-3"><span className={`text-xs px-2 py-0.5 rounded-full font-medium ${sale.status === 'partial' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>{sale.status}</span></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </>
                 )}
 
                 {/* Profit */}
                 {reportType === 'profit' && rd && (
                   <>
-                    <div className="bg-green-50 rounded-xl px-4 py-3 mb-4 inline-block">
-                      <p className="text-xs text-green-600 font-medium">Total Estimated Profit (USD)</p>
-                      <p className="text-2xl font-bold text-green-800">{formatCurrency(rd.totalProfitUSD || 0, 'USD')}</p>
-                      <p className="text-xs text-green-500 mt-1">⚠️ Estimated — not realized cash profit</p>
+                    {/* Summary Cards */}
+                    <div className="flex gap-4 mb-5 flex-wrap">
+                      <div className="bg-green-50 rounded-xl px-4 py-3">
+                        <p className="text-xs text-green-600 font-medium">Total Est. Profit (Foreign)</p>
+                        <p className="text-2xl font-bold text-green-800">{formatCurrency(rd.totalProfitUSD || 0, 'USD')}</p>
+                        <p className="text-xs text-green-500 mt-1">⚠️ Estimated — not realized cash profit</p>
+                      </div>
+                      <div className="bg-blue-50 rounded-xl px-4 py-3">
+                        <p className="text-xs text-blue-600 font-medium">Total Est. Profit (INR)</p>
+                        <p className="text-2xl font-bold text-blue-800">{formatCurrency(rd.totalProfitINR || 0, 'INR')}</p>
+                      </div>
+                      <div className="bg-gray-50 rounded-xl px-4 py-3">
+                        <p className="text-xs text-gray-600 font-medium">Total Sales (Foreign)</p>
+                        <p className="text-2xl font-bold text-gray-800">{formatCurrency(rd.totalSalesForeign || 0, 'USD')}</p>
+                      </div>
+                      <div className="bg-slate-50 rounded-xl px-4 py-3">
+                        <p className="text-xs text-slate-600 font-medium">Total Sales (INR)</p>
+                        <p className="text-2xl font-bold text-slate-800">{formatCurrency(rd.totalSalesINR || 0, 'INR')}</p>
+                      </div>
                     </div>
-                    <table className="w-full text-sm">
-                      <thead><tr className="border-b"><th className="text-left py-2 px-3 text-gray-500">Party</th><th className="text-left py-2 px-3 text-gray-500">Country</th><th className="text-right py-2 px-3 text-gray-500">Sales Count</th><th className="text-right py-2 px-3 text-gray-500">Total Sales (USD)</th><th className="text-right py-2 px-3 text-gray-500">Est. Profit (USD)</th></tr></thead>
-                      <tbody>
-                        {rd.profitByParty?.map(p => (
-                          <tr key={p._id} className="border-b border-gray-50 hover:bg-gray-50">
-                            <td className="py-2 px-3 font-medium">{p.party?.name || 'Unknown'}</td>
-                            <td className="py-2 px-3">{p.party?.country}</td>
-                            <td className="py-2 px-3 text-right">{p.count}</td>
-                            <td className="py-2 px-3 text-right">{formatCurrency(p.totalSalesForeign || 0, 'USD')}</td>
-                            <td className="py-2 px-3 text-right text-green-600 font-semibold">{formatCurrency(p.totalProfitForeign || 0, 'USD')}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+
+                    {rd.profitByParty?.length === 0 ? (
+                      <p className="text-center text-gray-400 py-8">No profit data found for the selected filters.</p>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b">
+                              <th className="text-left py-2 px-3 text-gray-500">Party</th>
+                              <th className="text-left py-2 px-3 text-gray-500">Country</th>
+                              <th className="text-right py-2 px-3 text-gray-500">Invoices</th>
+                              <th className="text-right py-2 px-3 text-gray-500">Sales (Foreign)</th>
+                              <th className="text-right py-2 px-3 text-gray-500">Sales (INR)</th>
+                              <th className="text-right py-2 px-3 text-gray-500">Est. Profit (Foreign)</th>
+                              <th className="text-right py-2 px-3 text-gray-500">Est. Profit (INR)</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {rd.profitByParty?.map(p => (
+                              <tr key={p._id} className="border-b border-gray-50 hover:bg-gray-50">
+                                <td className="py-2 px-3 font-medium">{p.party?.name || 'Unknown'}</td>
+                                <td className="py-2 px-3">{p.party?.country || '-'}</td>
+                                <td className="py-2 px-3 text-right">{p.count}</td>
+                                <td className="py-2 px-3 text-right">{formatCurrency(p.totalSalesForeign || 0, 'USD')}</td>
+                                <td className="py-2 px-3 text-right">{formatCurrency(p.totalSalesINR || 0, 'INR')}</td>
+                                <td className="py-2 px-3 text-right text-green-600 font-semibold">{formatCurrency(p.totalProfitForeign || 0, 'USD')}</td>
+                                <td className="py-2 px-3 text-right text-blue-600 font-semibold">{formatCurrency(p.totalProfitINR || 0, 'INR')}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
                   </>
                 )}
 
