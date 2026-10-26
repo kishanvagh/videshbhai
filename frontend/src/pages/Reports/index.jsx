@@ -61,7 +61,10 @@ export default function Reports() {
     }
   };
 
-  const rd = reportQuery.data?.data;
+  const respBody = reportQuery.data?.data;
+  // API `success()` wraps the payload under `data` -> use the inner payload.
+  // Fall back to the response body directly for robustness.
+  const rd = respBody?.data ?? respBody;
 
   return (
     <div>
@@ -130,12 +133,12 @@ export default function Reports() {
                   <>
                     <div className="flex gap-4 mb-4 flex-wrap">
                       <div className="bg-blue-50 rounded-xl px-4 py-3">
-                        <p className="text-xs text-blue-600 font-medium">Total Sales (INR)</p>
-                        <p className="text-xl font-bold text-blue-800">{formatCurrency(rd.summary?.totalINR, 'INR')}</p>
+                        <p className="text-xs text-blue-600 font-medium">Total Sales (USD)</p>
+                        <p className="text-xl font-bold text-blue-800">{formatCurrency(rd.summary?.totalForeign, 'USD')}</p>
                       </div>
                       <div className="bg-green-50 rounded-xl px-4 py-3">
-                        <p className="text-xs text-green-600 font-medium">Estimated Profit</p>
-                        <p className="text-xl font-bold text-green-800">{formatCurrency(rd.summary?.totalProfitINR, 'INR')}</p>
+                        <p className="text-xs text-green-600 font-medium">Estimated Profit (USD)</p>
+                        <p className="text-xl font-bold text-green-800">{formatCurrency(rd.summary?.totalProfitForeign, 'USD')}</p>
                       </div>
                       <div className="bg-gray-50 rounded-xl px-4 py-3">
                         <p className="text-xs text-gray-600 font-medium">Total Invoices</p>
@@ -149,9 +152,9 @@ export default function Reports() {
                           <th className="text-left py-2 px-3 text-gray-500">Date</th>
                           <th className="text-left py-2 px-3 text-gray-500">Party</th>
                           <th className="text-left py-2 px-3 text-gray-500">Product</th>
-                          <th className="text-right py-2 px-3 text-gray-500">INR</th>
-                          <th className="text-right py-2 px-3 text-gray-500">Foreign</th>
-                          <th className="text-right py-2 px-3 text-gray-500">Profit</th>
+                          <th className="text-right py-2 px-3 text-gray-500">Home Price</th>
+                          <th className="text-right py-2 px-3 text-gray-500">Sale (USD)</th>
+                          <th className="text-right py-2 px-3 text-gray-500">Profit (USD)</th>
                           <th className="text-left py-2 px-3 text-gray-500">Status</th>
                         </tr></thead>
                         <tbody>
@@ -161,9 +164,9 @@ export default function Reports() {
                               <td className="py-2 px-3">{formatDate(s.saleDate)}</td>
                               <td className="py-2 px-3">{s.party?.name}</td>
                               <td className="py-2 px-3">{s.productName}</td>
-                              <td className="py-2 px-3 text-right">{formatCurrency(s.saleAmountINR, 'INR')}</td>
+                              <td className="py-2 px-3 text-right">{s.saleAmountINR > 0 ? formatCurrency(s.saleAmountINR, s.homePriceCurrency || 'INR') : '-'}</td>
                               <td className="py-2 px-3 text-right">{s.saleAmountForeign > 0 ? formatCurrency(s.saleAmountForeign, s.foreignCurrency) : '-'}</td>
-                              <td className="py-2 px-3 text-right text-green-600">{formatCurrency(s.estimatedProfitINR, 'INR')}</td>
+                              <td className="py-2 px-3 text-right text-green-600">{formatCurrency(s.estimatedProfitForeign || 0, s.foreignCurrency)}</td>
                               <td className="py-2 px-3"><span className={`text-xs px-2 py-0.5 rounded-full font-medium ${s.status === 'settled' ? 'bg-green-100 text-green-700' : s.status === 'partial' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>{s.status}</span></td>
                             </tr>
                           ))}
@@ -226,20 +229,20 @@ export default function Reports() {
                 {reportType === 'profit' && rd && (
                   <>
                     <div className="bg-green-50 rounded-xl px-4 py-3 mb-4 inline-block">
-                      <p className="text-xs text-green-600 font-medium">Total Estimated Profit (INR)</p>
-                      <p className="text-2xl font-bold text-green-800">{formatCurrency(rd.totalProfitINR, 'INR')}</p>
+                      <p className="text-xs text-green-600 font-medium">Total Estimated Profit (USD)</p>
+                      <p className="text-2xl font-bold text-green-800">{formatCurrency(rd.totalProfitUSD || 0, 'USD')}</p>
                       <p className="text-xs text-green-500 mt-1">⚠️ Estimated — not realized cash profit</p>
                     </div>
                     <table className="w-full text-sm">
-                      <thead><tr className="border-b"><th className="text-left py-2 px-3 text-gray-500">Party</th><th className="text-left py-2 px-3 text-gray-500">Country</th><th className="text-right py-2 px-3 text-gray-500">Sales Count</th><th className="text-right py-2 px-3 text-gray-500">Total Sales (INR)</th><th className="text-right py-2 px-3 text-gray-500">Est. Profit (INR)</th></tr></thead>
+                      <thead><tr className="border-b"><th className="text-left py-2 px-3 text-gray-500">Party</th><th className="text-left py-2 px-3 text-gray-500">Country</th><th className="text-right py-2 px-3 text-gray-500">Sales Count</th><th className="text-right py-2 px-3 text-gray-500">Total Sales (USD)</th><th className="text-right py-2 px-3 text-gray-500">Est. Profit (USD)</th></tr></thead>
                       <tbody>
                         {rd.profitByParty?.map(p => (
                           <tr key={p._id} className="border-b border-gray-50 hover:bg-gray-50">
                             <td className="py-2 px-3 font-medium">{p.party?.name || 'Unknown'}</td>
                             <td className="py-2 px-3">{p.party?.country}</td>
                             <td className="py-2 px-3 text-right">{p.count}</td>
-                            <td className="py-2 px-3 text-right">{formatCurrency(p.totalSalesINR, 'INR')}</td>
-                            <td className="py-2 px-3 text-right text-green-600 font-semibold">{formatCurrency(p.totalProfitINR, 'INR')}</td>
+                            <td className="py-2 px-3 text-right">{formatCurrency(p.totalSalesForeign || 0, 'USD')}</td>
+                            <td className="py-2 px-3 text-right text-green-600 font-semibold">{formatCurrency(p.totalProfitForeign || 0, 'USD')}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -279,13 +282,13 @@ export default function Reports() {
                 {/* Trend */}
                 {reportType === 'trend' && rd && (
                   <div>
-                    <h3 className="font-semibold text-slate-800 mb-4">Monthly Sales Trend (INR)</h3>
+                    <h3 className="font-semibold text-slate-800 mb-4">Monthly Sales Trend (USD)</h3>
                     <ResponsiveContainer width="100%" height={300}>
-                      <BarChart data={rd.salesTrend?.map(d => ({ name: `${d._id.year}-${String(d._id.month).padStart(2, '0')}`, Sales: d.totalINR, Count: d.count }))}>
+                      <BarChart data={rd.salesTrend?.map(d => ({ name: `${d._id.year}-${String(d._id.month).padStart(2, '0')}`, Sales: d.totalForeign, Count: d.count }))}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                         <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                        <YAxis tick={{ fontSize: 11 }} tickFormatter={v => `₹${(v/1000).toFixed(0)}k`} />
-                        <Tooltip formatter={(v) => formatCurrency(v, 'INR')} />
+                        <YAxis tick={{ fontSize: 11 }} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} />
+                        <Tooltip formatter={(v) => formatCurrency(v, 'USD')} />
                         <Bar dataKey="Sales" fill="#C9A84C" radius={[4, 4, 0, 0]} />
                       </BarChart>
                     </ResponsiveContainer>

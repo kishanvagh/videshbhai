@@ -1,0 +1,1 @@
+fix: reports page showing empty - parse API payload level, show USD figures

@@ -31,8 +31,19 @@ const getSalesReport = async (req, res, next) => {
 
     const totalINR = sales.reduce((s, x) => decimal.add(s, x.saleAmountINR), 0);
     const totalProfitINR = sales.reduce((s, x) => decimal.add(s, x.estimatedProfitINR || 0), 0);
+    const totalForeign = sales.reduce((s, x) => decimal.add(s, x.saleAmountForeign || 0), 0);
+    const totalProfitForeign = sales.reduce((s, x) => decimal.add(s, x.estimatedProfitForeign || 0), 0);
 
-    return success(res, { sales, summary: { totalINR: decimal.round2(totalINR), totalProfitINR: decimal.round2(totalProfitINR), count: sales.length } });
+    return success(res, {
+      sales,
+      summary: {
+        totalINR: decimal.round2(totalINR),
+        totalProfitINR: decimal.round2(totalProfitINR),
+        totalForeign: decimal.round2(totalForeign),
+        totalProfitForeign: decimal.round2(totalProfitForeign),
+        count: sales.length
+      }
+    });
   } catch (err) { next(err); }
 };
 
@@ -103,16 +114,23 @@ const getProfitReport = async (req, res, next) => {
           _id: '$party',
           totalSalesINR: { $sum: '$saleAmountINR' },
           totalProfitINR: { $sum: '$estimatedProfitINR' },
+          totalSalesForeign: { $sum: '$saleAmountForeign' },
+          totalProfitForeign: { $sum: '$estimatedProfitForeign' },
           count: { $sum: 1 }
         }
       },
       { $lookup: { from: 'parties', localField: '_id', foreignField: '_id', as: 'party' } },
       { $unwind: { path: '$party', preserveNullAndEmpty: true } },
-      { $sort: { totalProfitINR: -1 } }
+      { $sort: { totalProfitForeign: -1 } }
     ]);
 
     const totalProfitINR = profitByParty.reduce((s, x) => decimal.add(s, x.totalProfitINR), 0);
-    return success(res, { profitByParty, totalProfitINR: decimal.round2(totalProfitINR) });
+    const totalProfitUSD = profitByParty.reduce((s, x) => decimal.add(s, x.totalProfitForeign), 0);
+    return success(res, {
+      profitByParty,
+      totalProfitINR: decimal.round2(totalProfitINR),
+      totalProfitUSD: decimal.round2(totalProfitUSD)
+    });
   } catch (err) { next(err); }
 };
 
@@ -261,7 +279,7 @@ const getMonthlyTrend = async (req, res, next) => {
 
     const salesTrend = await Sale.aggregate([
       { $match: { user: userObjectId, status: { $ne: 'cancelled' }, saleDate: { $gte: startDate } } },
-      { $group: { _id: { year: { $year: '$saleDate' }, month: { $month: '$saleDate' } }, totalINR: { $sum: '$saleAmountINR' }, count: { $sum: 1 } } },
+      { $group: { _id: { year: { $year: '$saleDate' }, month: { $month: '$saleDate' } }, totalINR: { $sum: '$saleAmountINR' }, totalForeign: { $sum: '$saleAmountForeign' }, count: { $sum: 1 } } },
       { $sort: { '_id.year': 1, '_id.month': 1 } }
     ]);
 
