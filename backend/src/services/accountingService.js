@@ -390,6 +390,67 @@ async function getCurrencyHoldings(userId, currency = null) {
 }
 
 /**
+ * Get the full currency wallet for a user.
+ * Any payment received from any party in any currency (including INR) is added
+ * to the wallet and is available for currency exchange.
+ * @param {string|ObjectId} userId
+ * @returns {Promise<Array>}
+ */
+async function getWalletBalances(userId) {
+  const holdings = await getCurrencyHoldings(userId);
+  const userObjectId = new mongoose.Types.ObjectId(userId);
+
+  // INR is part of the wallet too (received INR payments + opening cash held +
+  // INR received from currency exchanges). INR is never exchanged out, so totalExchanged stays 0.
+  const inrPaymentAgg = await Payment.aggregate([
+    { $match: { user: userObjectId, currency: 'INR', isReversed: false } },
+    { $group: { _id: null, total: { $sum: '$amountReceived' } } }
+  ]);
+  const inrPaymentsReceived = inrPaymentAgg.length > 0 ? inrPaymentAgg[0].total : 0;
+
+  const inrOpeningAgg = await OpeningBalance.aggregate([
+    { $match: { user: userObjectId, currency: 'INR', balanceType: 'cash_held' } },
+    { $group: { _id: null, total: { $sum: '$amount' } } }
+  ]);
+  const inrOpeningCashHeld = inrOpeningAgg.length > 0 ? inrOpeningAgg[0].total : 0;
+
+  const inrFromExchangesAgg = await CurrencyExchange.aggregate([
+    { $match: { user: userObjectId, isReversed: false } },
+    {
+      $group: {
+        _id: null,
+        received: { $sum: '$inrReceivedAmount' },
+        pending: { $sum: '$inrPendingAmount' },
+        gross: { $sum: '$netINRReceived' }
+      }
+    }
+  ]);
+  // Only the INR actually received from the exchange party counts towards the INR wallet.
+  // Pending/due amounts (e.g. party paid only 50%) are tracked separately.
+  const inrReceivedFromExchanges = inrFromExchangesAgg.length > 0 ? inrFromExchangesAgg[0].received : 0;
+  const inrPendingFromExchanges = inrFromExchangesAgg.length > 0 ? inrFromExchangesAgg[0].pending : 0;
+
+  const inrTotalReceived = decimal.add(
+    decimal.add(inrPaymentsReceived, inrOpeningCashHeld),
+    inrReceivedFromExchanges
+  );
+
+  holdings.push({
+    currency: 'INR',
+    totalPaymentsReceived: decimal.round2(inrPaymentsReceived),
+    openingCashHeld: decimal.round2(inrOpeningCashHeld),
+    totalReceived: decimal.round2(inrTotalReceived),
+    totalExchanged: 0,
+    grossINRFromExchanges: decimal.round2(inrReceivedFromExchanges),
+    netINRFromExchanges: decimal.round2(inrReceivedFromExchanges),
+    pendingFromExchanges: decimal.round2(inrPendingFromExchanges),
+    currentHolding: decimal.round2(inrTotalReceived)
+  });
+
+  return holdings;
+}
+
+/**
  * Get comprehensive dashboard summary
  * @param {string|ObjectId} userId
  * @param {Object} filters
@@ -428,12 +489,17 @@ async function getDashboardSummary(userId, filters = {}) {
   let totalSalesINR = 0;
   let totalProfitINR = 0;
   let totalSalesCount = 0;
+  // USD-first totals (sales are primarily recorded in USD)
+  let totalSalesUSD = 0;
+  let totalProfitUSD = 0;
   const salesByCurrency = {};
   const profitByCurrency = {};
 
   salesAgg.forEach(group => {
     totalSalesINR = decimal.add(totalSalesINR, group.totalINR);
     totalProfitINR = decimal.add(totalProfitINR, group.totalProfitINR);
+    totalSalesUSD = decimal.add(totalSalesUSD, group.totalForeign);
+    totalProfitUSD = decimal.add(totalProfitUSD, group.totalProfitForeign);
     totalSalesCount += group.count;
     const currency = group._id || 'INR';
     salesByCurrency[currency] = {
@@ -473,12 +539,15 @@ async function getDashboardSummary(userId, filters = {}) {
   const paymentsByCurrency = {};
   let paymentsCount = 0;
   let totalReceivedINR = 0;
+  let totalReceivedUSD = 0;
   paymentAgg.forEach(group => {
     paymentsCount += group.count;
     // Only INR receipts count towards the INR total; foreign amounts are
     // reported per-currency in paymentsByCurrency (cannot be summed as INR).
     if (group._id === 'INR') {
       totalReceivedINR = decimal.add(totalReceivedINR, group.totalReceived);
+    } else {
+      totalReceivedUSD = decimal.add(totalReceivedUSD, group.totalReceived);
     }
     paymentsByCurrency[group._id] = {
       count: group.count,
@@ -543,6 +612,7 @@ async function getDashboardSummary(userId, filters = {}) {
   // Outstanding by currency across all active parties
   const outstandingByCurrency = {};
   let totalOutstandingINR = 0;
+  let totalOutstandingUSD = 0;
   partySummaries.forEach((ps) => {
     (ps.balances || []).forEach((b) => {
       if (b.outstanding > 0.001) {
@@ -551,6 +621,8 @@ async function getDashboardSummary(userId, filters = {}) {
         );
         if (b.currency === 'INR') {
           totalOutstandingINR = decimal.add(totalOutstandingINR, b.outstanding);
+        } else {
+          totalOutstandingUSD = decimal.add(totalOutstandingUSD, b.outstanding);
         }
       }
     });
@@ -559,6 +631,10 @@ async function getDashboardSummary(userId, filters = {}) {
   const overview = {
     totalSalesINR: decimal.round2(totalSalesINR),
     totalProfitINR: decimal.round2(totalProfitINR),
+    totalSalesUSD: decimal.round2(totalSalesUSD),
+    totalProfitUSD: decimal.round2(totalProfitUSD),
+    totalReceivedUSD: decimal.round2(totalReceivedUSD),
+    totalOutstandingUSD: decimal.round2(totalOutstandingUSD),
     inrFromExchanges: inrFromExchanges.netINR,
     totalSalesCount,
     paymentsCount,
@@ -571,6 +647,10 @@ async function getDashboardSummary(userId, filters = {}) {
     // Top-level aliases (kept for backwards compatibility with older clients)
     totalSalesINR: overview.totalSalesINR,
     totalProfitINR: overview.totalProfitINR,
+    totalSalesUSD: overview.totalSalesUSD,
+    totalProfitUSD: overview.totalProfitUSD,
+    totalReceivedUSD: overview.totalReceivedUSD,
+    totalOutstandingUSD: overview.totalOutstandingUSD,
     totalSalesCount,
     paymentsCount,
     totalReceivedINR: overview.totalReceivedINR,
@@ -591,5 +671,6 @@ module.exports = {
   getPartyBalances,
   computeAutoPaymentAllocation,
   getCurrencyHoldings,
+  getWalletBalances,
   getDashboardSummary
 };

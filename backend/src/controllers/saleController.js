@@ -103,6 +103,7 @@ const createSale = async (req, res, next) => {
       productDescription,
       quantity,
       saleAmountINR,
+      homePriceCurrency,
       saleAmountForeign,
       foreignCurrency,
       estimatedProfitINR,
@@ -119,8 +120,12 @@ const createSale = async (req, res, next) => {
       return error(res, 'Product name is required', 400);
     }
 
-    if (saleAmountINR === undefined || saleAmountINR === null || saleAmountINR < 0) {
-      return error(res, 'Valid saleAmountINR is required', 400);
+    if (saleAmountForeign === undefined || saleAmountForeign === null || parseFloat(saleAmountForeign) < 0) {
+      return error(res, 'Valid sale price (foreign currency) is required', 400);
+    }
+
+    if (!foreignCurrency || foreignCurrency === 'INR') {
+      return error(res, 'A foreign currency (e.g. USD) is required for the sale price', 400);
     }
 
     // Validate party belongs to user
@@ -148,9 +153,10 @@ const createSale = async (req, res, next) => {
       productName: productName.trim(),
       productDescription: productDescription ? productDescription.trim() : '',
       quantity: quantity ? Number(quantity) : 1,
-      saleAmountINR: decimal.round2(saleAmountINR),
+      saleAmountINR: decimal.round2(saleAmountINR || 0),
+      homePriceCurrency: homePriceCurrency || 'INR',
       saleAmountForeign: saleAmountForeign ? decimal.round2(saleAmountForeign) : 0,
-      foreignCurrency: foreignCurrency || party.preferredCurrency || 'INR',
+      foreignCurrency: foreignCurrency || party.preferredCurrency || 'USD',
       estimatedProfitINR: estimatedProfitINR ? decimal.round2(estimatedProfitINR) : 0,
       estimatedProfitForeign: estimatedProfitForeign ? decimal.round2(estimatedProfitForeign) : 0,
       status: 'active',
@@ -227,6 +233,7 @@ const updateSale = async (req, res, next) => {
       'productDescription',
       'quantity',
       'saleAmountINR',
+      'homePriceCurrency',
       'saleAmountForeign',
       'foreignCurrency',
       'estimatedProfitINR',

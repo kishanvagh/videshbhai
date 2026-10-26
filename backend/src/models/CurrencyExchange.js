@@ -44,6 +44,24 @@ const currencyExchangeSchema = new mongoose.Schema({
     type: Number,
     required: [true, 'Net INR received is required']
   },
+  exchangePartyName: {
+    type: String,
+    trim: true
+  },
+  paymentReceivedPercent: {
+    type: Number,
+    default: 0,
+    min: 0,
+    max: 100
+  },
+  inrReceivedAmount: {
+    type: Number,
+    default: 0
+  },
+  inrPendingAmount: {
+    type: Number,
+    default: 0
+  },
   bankReference: {
     type: String,
     trim: true

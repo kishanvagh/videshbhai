@@ -39,12 +39,13 @@ const getExchanges = async (req, res, next) => {
   }
 };
 
-// @desc    Get currency balance positions
+// @desc    Get currency balance positions (wallet)
 // @route   GET /api/exchanges/currency-balances
 const getCurrencyBalances = async (req, res, next) => {
   try {
     const holdings = await accountingService.getCurrencyHoldings(req.user.id);
-    return success(res, { holdings });
+    const wallet = await accountingService.getWalletBalances(req.user.id);
+    return success(res, { holdings, wallet });
   } catch (err) {
     next(err);
   }
@@ -65,6 +66,9 @@ const createExchange = async (req, res, next) => {
       bankReference,
       notes,
       source,
+      exchangePartyName,
+      paymentReceivedPercent,
+      inrReceivedAmount,
     } = req.body;
 
     if (!foreignCurrency || !foreignAmountExchanged || !exchangeRate) {
@@ -78,6 +82,20 @@ const createExchange = async (req, res, next) => {
     const netINR = netINRReceived != null
       ? decimal.round2(parseFloat(netINRReceived))
       : decimal.round2(decimal.subtract(grossINR, fee));
+
+    // Payment-received tracking: how much of the expected INR the user has actually
+    // collected from the currency-exchange party (Full payment = 100, half = 50, etc.)
+    const pct = (paymentReceivedPercent !== undefined && paymentReceivedPercent !== null && paymentReceivedPercent !== '')
+      ? Math.min(100, Math.max(0, parseFloat(paymentReceivedPercent) || 0))
+      : 0;
+    // Prefer an explicitly entered INR received amount (manual entry); otherwise derive from percent
+    let inrReceived;
+    if (inrReceivedAmount !== undefined && inrReceivedAmount !== null && inrReceivedAmount !== '') {
+      inrReceived = decimal.round2(Math.min(netINR, parseFloat(inrReceivedAmount) || 0));
+    } else {
+      inrReceived = decimal.round2(decimal.multiply(netINR, decimal.divide(pct, 100)));
+    }
+    const inrPending = decimal.round2(decimal.subtract(netINR, inrReceived));
 
     // Validate: don't let exchange exceed available holding
     if (source !== 'external' && source !== 'opening_balance') {
@@ -101,6 +119,10 @@ const createExchange = async (req, res, next) => {
       grossINRAmount: grossINR,
       exchangeFee: fee,
       netINRReceived: netINR,
+      exchangePartyName: exchangePartyName || null,
+      paymentReceivedPercent: pct,
+      inrReceivedAmount: inrReceived,
+      inrPendingAmount: inrPending,
       bankReference,
       notes,
       source: source || 'payment',
@@ -132,7 +154,7 @@ const updateExchange = async (req, res, next) => {
     if (exchange.isReversed) return error(res, 'Cannot edit a reversed exchange', 400);
 
     const before = exchange.toObject();
-    const allowed = ['exchangeDate', 'exchangeRate', 'exchangeFee', 'netINRReceived', 'bankReference', 'notes', 'party'];
+    const allowed = ['exchangeDate', 'exchangeRate', 'exchangeFee', 'netINRReceived', 'bankReference', 'notes', 'party', 'exchangePartyName'];
     allowed.forEach((f) => {
       if (req.body[f] !== undefined) exchange[f] = req.body[f];
     });
@@ -143,6 +165,19 @@ const updateExchange = async (req, res, next) => {
     if (!req.body.netINRReceived) {
       exchange.netINRReceived = decimal.round2(decimal.subtract(exchange.grossINRAmount, exchange.exchangeFee));
     }
+
+    // Recalculate payment-received tracking (Full / partial %)
+    if (req.body.paymentReceivedPercent !== undefined && req.body.paymentReceivedPercent !== null && req.body.paymentReceivedPercent !== '') {
+      exchange.paymentReceivedPercent = Math.min(100, Math.max(0, parseFloat(req.body.paymentReceivedPercent) || 0));
+    }
+    // Prefer an explicitly entered INR received amount (manual entry) over percent-derived
+    if (req.body.inrReceivedAmount !== undefined && req.body.inrReceivedAmount !== null && req.body.inrReceivedAmount !== '') {
+      exchange.inrReceivedAmount = decimal.round2(Math.min(exchange.netINRReceived, parseFloat(req.body.inrReceivedAmount) || 0));
+    } else {
+      const pctVal = exchange.paymentReceivedPercent || 0;
+      exchange.inrReceivedAmount = decimal.round2(decimal.multiply(exchange.netINRReceived, decimal.divide(pctVal, 100)));
+    }
+    exchange.inrPendingAmount = decimal.round2(decimal.subtract(exchange.netINRReceived, exchange.inrReceivedAmount));
 
     await exchange.save();
     await AuditLog.create({ user: req.user.id, entityType: 'CurrencyExchange', entityId: exchange._id, action: 'update', before, after: exchange.toObject(), ip: req.ip });

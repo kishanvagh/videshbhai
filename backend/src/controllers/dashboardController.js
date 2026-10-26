@@ -71,12 +71,17 @@ const getPartyTable = async (req, res, next) => {
         }
       ]);
       const profitByCurrency = {};
+      let totalProfitUSD = 0;
       profitByCurrencyAgg.forEach(g => {
         profitByCurrency[g._id || 'INR'] = {
           profitINR: decimal.round2(g.profitINR || 0),
           profitForeign: decimal.round2(g.profitForeign || 0)
         };
+        if ((g._id || 'INR') !== 'INR') {
+          totalProfitUSD = decimal.add(totalProfitUSD, g.profitForeign || 0);
+        }
       });
+      totalProfitUSD = decimal.round2(totalProfitUSD);
 
       // hasOutstanding
       const hasOutstanding = balances.some(b => b.outstanding > 0.01);
@@ -98,6 +103,7 @@ const getPartyTable = async (req, res, next) => {
         totalReceivedINR: decimal.round2(receivedINR),
         outstandingINR: decimal.round2(outstandingINR),
         totalProfitINR: profitINR,
+        totalProfitUSD,
         estimatedProfitINR: profitINR,
         profitByCurrency,
         lastTransaction,

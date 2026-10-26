@@ -39,8 +39,13 @@ const saleSchema = new mongoose.Schema({
   },
   saleAmountINR: {
     type: Number,
-    required: [true, 'Sale amount in INR is required'],
+    default: 0,
     min: 0
+  },
+  homePriceCurrency: {
+    type: String,
+    default: 'INR',
+    enum: ['INR', 'USD']
   },
   saleAmountForeign: {
     type: Number,
@@ -49,8 +54,8 @@ const saleSchema = new mongoose.Schema({
   },
   foreignCurrency: {
     type: String,
-    default: 'INR',
-    enum: ['INR', 'USD', 'AUD', 'EUR', 'GBP', 'CAD', 'SGD', 'AED', 'OTHER']
+    default: 'USD',
+    enum: ['USD', 'INR', 'AUD', 'EUR', 'GBP', 'CAD', 'SGD', 'AED', 'OTHER']
   },
   estimatedProfitINR: {
     type: Number,
