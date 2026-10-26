@@ -21,7 +21,7 @@ import LoadingSpinner, { PageLoader } from '../../components/UI/LoadingSpinner';
 import SaleForm from './SaleForm';
 import { getSales, cancelSale } from '../../api/sales';
 import { getParties } from '../../api/parties';
-import { formatCurrency, formatINR, formatDate, CURRENCIES } from '../../utils/formatters';
+import { formatCurrency, formatDate, CURRENCIES } from '../../utils/formatters';
 
 export default function SoldItems() {
   const [sales, setSales] = useState([]);
@@ -227,9 +227,9 @@ export default function SoldItems() {
                   <th className="py-3 px-4">Date</th>
                   <th className="py-3 px-4">Party</th>
                   <th className="py-3 px-4">Product Details</th>
-                  <th className="py-3 px-4 text-right">Sale Price (INR)</th>
-                  <th className="py-3 px-4 text-right">Foreign Price</th>
-                  <th className="py-3 px-4 text-right">Est. Profit</th>
+                  <th className="py-3 px-4 text-right">Sale Price (USD)</th>
+                  <th className="py-3 px-4 text-right">Home Price</th>
+                  <th className="py-3 px-4 text-right">Est. Profit (USD)</th>
                   <th className="py-3 px-4 text-center">Status</th>
                   <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
@@ -267,13 +267,15 @@ export default function SoldItems() {
                           )}
                         </td>
                         <td className="py-3 px-4 text-right font-bold text-slate-800">
-                          {formatINR(sale.saleAmountINR ?? sale.amountINR ?? 0)}
-                        </td>
-                        <td className="py-3 px-4 text-right font-medium text-slate-700">
                           {formatCurrency(sale.saleAmountForeign ?? sale.amountForeign ?? 0, cur)}
                         </td>
+                        <td className="py-3 px-4 text-right font-medium text-slate-700">
+                          {parseFloat(sale.saleAmountINR ?? sale.amountINR ?? 0) > 0
+                            ? formatCurrency(sale.saleAmountINR ?? sale.amountINR ?? 0, sale.homePriceCurrency || 'INR')
+                            : '-'}
+                        </td>
                         <td className="py-3 px-4 text-right font-medium text-green-600">
-                          {formatINR(sale.estimatedProfitINR ?? sale.profitINR ?? 0)}
+                          {formatCurrency(sale.estimatedProfitForeign ?? sale.profitForeign ?? 0, cur)}
                         </td>
                         <td className="py-3 px-4 text-center">
                           <StatusBadge status={sale.status} />
@@ -385,18 +387,24 @@ export default function SoldItems() {
             <div className="p-4 rounded-xl bg-gray-50 border border-gray-200 space-y-2">
               <p className="text-xs font-bold uppercase tracking-wider text-slate-700">Financial Representation</p>
               <div className="flex justify-between">
-                <span className="text-gray-500">Sale Price (INR):</span>
-                <span className="font-bold text-slate-800">{formatINR(viewSaleModal.saleAmountINR)}</span>
+                <span className="text-gray-500">Sale Price (USD):</span>
+                <span className="font-bold text-slate-800">
+                  {formatCurrency(viewSaleModal.saleAmountForeign ?? 0, viewSaleModal.foreignCurrency || 'USD')}
+                </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-gray-500">Foreign Price:</span>
+                <span className="text-gray-500">Home Price:</span>
                 <span className="font-bold text-slate-800">
-                  {formatCurrency(viewSaleModal.saleAmountForeign, viewSaleModal.foreignCurrency)}
+                  {parseFloat(viewSaleModal.saleAmountINR || 0) > 0
+                    ? formatCurrency(viewSaleModal.saleAmountINR, viewSaleModal.homePriceCurrency || 'INR')
+                    : '-'}
                 </span>
               </div>
               <div className="flex justify-between border-t border-gray-200 pt-2">
-                <span className="text-gray-500">Estimated Profit (INR):</span>
-                <span className="font-bold text-green-600">{formatINR(viewSaleModal.estimatedProfitINR || 0)}</span>
+                <span className="text-gray-500">Estimated Profit (USD):</span>
+                <span className="font-bold text-green-600">
+                  {formatCurrency(viewSaleModal.estimatedProfitForeign || 0, viewSaleModal.foreignCurrency || 'USD')}
+                </span>
               </div>
             </div>
 

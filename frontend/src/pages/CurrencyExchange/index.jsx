@@ -46,7 +46,9 @@ export default function CurrencyExchange() {
   const fetchBalances = async () => {
     try {
       const res = await getCurrencyBalances();
-      const list = res.data.data || res.data || [];
+      const data = res.data.data || res.data || {};
+      // Wallet = all currencies (foreign + INR). Falls back gracefully for old API shapes.
+      const list = data.wallet || (Array.isArray(data) ? data : data.holdings || []);
       setHoldings(Array.isArray(list) ? list : []);
     } catch {
       // non-critical
@@ -131,11 +133,12 @@ export default function CurrencyExchange() {
       </TopBar>
 
       <div className="p-6 space-y-6 max-w-7xl mx-auto">
-        {/* Holdings Cards */}
+        {/* Wallet Cards */}
         <div>
           <div className="flex items-center gap-2 mb-3">
             <Coins size={18} className="text-gold-500" />
-            <h2 className="text-base font-bold text-slate-800">Current Foreign Currency Positions</h2>
+            <h2 className="text-base font-bold text-slate-800">Currency Wallet</h2>
+            <span className="text-[11px] text-gray-400">All payments received from any party are added here automatically</span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -143,8 +146,9 @@ export default function CurrencyExchange() {
               holdings.map((h) => {
                 const bal = parseFloat(h.currentHolding ?? h.currentBalance ?? h.balance ?? 0);
                 const isPositive = bal > 0;
+                const isINR = h.currency === 'INR';
                 return (
-                  <div key={h.currency} className="card p-4 relative overflow-hidden">
+                  <div key={h.currency} className={`card p-4 relative overflow-hidden ${isINR ? 'border-gold-300' : ''}`}>
                     <div className="flex justify-between items-start mb-2">
                       <span className="px-2.5 py-1 rounded bg-navy-50 text-navy-700 font-bold text-xs uppercase tracking-wide">
                         {h.currency}
@@ -152,7 +156,7 @@ export default function CurrencyExchange() {
                       <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
                         isPositive ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
                       }`}>
-                        {isPositive ? 'Available' : 'Low / Zero'}
+                        {isINR ? 'Wallet' : (isPositive ? 'Available' : 'Low / Zero')}
                       </span>
                     </div>
 
@@ -163,20 +167,26 @@ export default function CurrencyExchange() {
 
                     <div className="mt-3 pt-3 border-t border-gray-100 grid grid-cols-2 gap-2 text-[11px] text-gray-500">
                       <div>
-                        <span className="block text-gray-400">Total Received:</span>
+                        <span className="block text-gray-400">{isINR ? 'Received (Payments):' : 'Total Received:'}</span>
                         <span className="font-semibold text-slate-700">{formatCurrency(h.totalReceived || 0, h.currency)}</span>
                       </div>
                       <div>
-                        <span className="block text-gray-400">Exchanged to INR:</span>
-                        <span className="font-semibold text-slate-700">{formatCurrency(h.totalExchanged || 0, h.currency)}</span>
+                        <span className="block text-gray-400">{isINR ? 'Received from Exch.:' : 'Exchanged to INR:'}</span>
+                        <span className="font-semibold text-slate-700">{formatCurrency(h.netINRFromExchanges || h.totalExchanged || 0, isINR ? 'INR' : h.currency)}</span>
                       </div>
+                      {isINR && parseFloat(h.pendingFromExchanges || 0) > 0 && (
+                        <div className="col-span-2 mt-1 pt-1.5 border-t border-amber-200 bg-amber-50 rounded-md px-2 py-1.5 flex items-center justify-between">
+                          <span className="text-amber-700 font-semibold">Due from Exchange Parties</span>
+                          <span className="font-bold text-amber-700">{formatINR(h.pendingFromExchanges)}</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
               })
             ) : (
               <div className="col-span-full card p-6 text-center text-sm text-gray-400">
-                No foreign currency holdings recorded yet. Record customer foreign payments first.
+                No wallet balances yet. Record customer payments in any currency and they will appear here for currency exchange.
               </div>
             )}
           </div>
@@ -265,12 +275,14 @@ export default function CurrencyExchange() {
                 <tr>
                   <th className="py-3 px-4">Date</th>
                   <th className="py-3 px-4">Party</th>
+                  <th className="py-3 px-4">Exchange Party</th>
                   <th className="py-3 px-4">Currency</th>
                   <th className="py-3 px-4 text-right">Amount Exchanged</th>
                   <th className="py-3 px-4 text-right">Rate</th>
                   <th className="py-3 px-4 text-right">Gross INR</th>
                   <th className="py-3 px-4 text-right">Fees</th>
                   <th className="py-3 px-4 text-right">Net INR Received</th>
+                  <th className="py-3 px-4 text-right">INR Received</th>
                   <th className="py-3 px-4">Reference</th>
                   <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
@@ -278,7 +290,7 @@ export default function CurrencyExchange() {
               <tbody className="divide-y divide-gray-100">
                 {loading ? (
                   <tr>
-                    <td colSpan={10} className="py-12 text-center">
+                    <td colSpan={12} className="py-12 text-center">
                       <LoadingSpinner size="lg" className="mx-auto mb-2" />
                       <p className="text-xs text-gray-400">Loading conversion history...</p>
                     </td>
@@ -297,6 +309,9 @@ export default function CurrencyExchange() {
                         </td>
                         <td className="py-3 px-4 font-medium text-slate-800 text-xs">
                           {partyName}
+                        </td>
+                        <td className="py-3 px-4 font-semibold text-slate-800 text-xs">
+                          {ex.exchangePartyName || '-'}
                         </td>
                         <td className="py-3 px-4">
                           <span className="px-2 py-0.5 rounded bg-gray-100 text-slate-700 font-bold text-xs">
@@ -317,6 +332,13 @@ export default function CurrencyExchange() {
                         </td>
                         <td className="py-3 px-4 text-right font-bold text-green-600">
                           {formatINR(ex.netINRReceived ?? ex.netINR ?? 0)}
+                        </td>
+                        <td className="py-3 px-4 text-right font-bold text-green-600">
+                          {formatINR(ex.inrReceivedAmount ?? 0)}
+                          {parseFloat(ex.inrPendingAmount || 0) > 0 && (
+                            <span className="block text-[10px] text-amber-600">Pending: {formatINR(ex.inrPendingAmount)}</span>
+                          )}
+                          <span className="block text-[10px] text-gray-400">{ex.paymentReceivedPercent || 0}% received</span>
                         </td>
                         <td className="py-3 px-4 text-xs font-mono text-gray-500">
                           {ex.referenceNumber || '-'}
@@ -350,7 +372,7 @@ export default function CurrencyExchange() {
                   })
                 ) : (
                   <tr>
-                    <td colSpan={10}>
+                    <td colSpan={12}>
                       <EmptyState
                         icon={ArrowLeftRight}
                         title="No currency exchanges recorded"

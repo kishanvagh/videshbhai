@@ -19,7 +19,7 @@ import StatusBadge from '../../components/UI/StatusBadge';
 import EmptyState from '../../components/UI/EmptyState';
 import LoadingSpinner, { PageLoader } from '../../components/UI/LoadingSpinner';
 import { getDashboardSummary, getPartyTable, getCurrencyPositions } from '../../api/dashboard';
-import { formatCurrency, formatINR, formatDate, COUNTRIES, CURRENCIES, getCurrencySymbol } from '../../utils/formatters';
+import { formatCurrency, formatDate, COUNTRIES, CURRENCIES, getCurrencySymbol } from '../../utils/formatters';
 
 export default function Dashboard() {
   const [loading, setLoading] = useState(true);
@@ -79,10 +79,12 @@ export default function Dashboard() {
   }
 
   // Format outstanding per currency (object -> array, e.g. {USD: 1500} -> [{currency:'USD', amount:1500}])
+  // Dashboard is USD-first, so INR receivables are omitted here.
   const rawOutstanding = summary?.outstandingByCurrency || summary?.outstanding || {};
-  const outstandingList = Array.isArray(rawOutstanding)
+  const outstandingList = (Array.isArray(rawOutstanding)
     ? rawOutstanding
-    : Object.entries(rawOutstanding).map(([currency, amount]) => ({ currency, amount }));
+    : Object.entries(rawOutstanding).map(([currency, amount]) => ({ currency, amount })))
+    .filter((item) => (item.currency || 'INR') !== 'INR');
 
   // Per-currency profit breakdown for dual-currency display (INR + USD / other foreign)
   const profitByCurrency = summary?.profitByCurrency || {};
@@ -136,15 +138,15 @@ export default function Dashboard() {
         {/* Summary Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
           <SummaryCard
-            title="Total Sales (INR)"
-            value={formatINR(summary?.totalSalesINR || summary?.totalSales || 0)}
+            title="Total Sales (USD)"
+            value={formatCurrency(summary?.totalSalesUSD || summary?.totalSales || 0, 'USD')}
             subValue={`${summary?.totalSalesCount || 0} invoices recorded`}
             icon={TrendingUp}
             color="gold"
           />
           <SummaryCard
-            title="Est. Net Profit (INR / USD)"
-            value={formatINR(summary?.totalProfitINR || summary?.totalProfit || 0)}
+            title="Est. Net Profit (USD)"
+            value={formatCurrency(summary?.totalProfitUSD || summary?.totalProfit || 0, 'USD')}
             subValue={
               foreignProfitText ? (
                 <span className="block space-y-0.5">
@@ -159,8 +161,8 @@ export default function Dashboard() {
             color="green"
           />
           <SummaryCard
-            title="Total Received (INR / USD)"
-            value={formatINR(summary?.totalReceivedINR || summary?.totalReceived || 0)}
+            title="Total Received (USD)"
+            value={formatCurrency(summary?.totalReceivedUSD || summary?.totalReceived || 0, 'USD')}
             subValue={
               foreignReceivedText ? (
                 <span className="block space-y-0.5">
@@ -192,7 +194,7 @@ export default function Dashboard() {
                 ))
               ) : (
                 <p className="text-xl font-bold text-slate-800 leading-tight">
-                  {formatINR(summary?.totalOutstandingINR || 0)}
+                  {formatCurrency(summary?.totalOutstandingUSD || 0, 'USD')}
                 </p>
               )}
             </div>
@@ -204,7 +206,7 @@ export default function Dashboard() {
           <div className="flex items-center justify-between mb-4 border-b border-gray-100 pb-3">
             <div className="flex items-center gap-2">
               <Coins className="text-gold-500" size={20} />
-              <h2 className="text-base font-bold text-slate-800">Foreign Currency Holdings (Cash / Bank In-Hand)</h2>
+              <h2 className="text-base font-bold text-slate-800">Currency Wallet (Foreign Holdings)</h2>
             </div>
             <Link to="/currency-exchange" className="text-xs font-semibold text-gold-600 hover:text-gold-700 flex items-center gap-1">
               Exchange Currency <ArrowUpRight size={14} />
@@ -299,7 +301,7 @@ export default function Dashboard() {
                   <th className="py-3 px-4 text-right">Total Sales</th>
                   <th className="py-3 px-4 text-right">Received</th>
                   <th className="py-3 px-4 text-right">Outstanding</th>
-                  <th className="py-3 px-4 text-right">Est. Profit (INR/USD)</th>
+                  <th className="py-3 px-4 text-right">Est. Profit (USD)</th>
                   <th className="py-3 px-4 text-center">Status</th>
                   <th className="py-3 px-4">Last Activity</th>
                   <th className="py-3 px-4 text-center">Action</th>
@@ -311,8 +313,7 @@ export default function Dashboard() {
                     const partyId = p._id || p.partyId || p.party?._id;
                     const name = p.name || p.party?.name || 'Unknown';
                     const country = p.country || p.party?.country || '-';
-                    const cur = p.preferredCurrency || p.currency || 'INR';
-                    const partyUsdProfit = parseFloat(p.profitByCurrency?.USD?.profitForeign || 0);
+                    const cur = p.preferredCurrency || p.currency || 'USD';
 
                     // Show sales / received / outstanding in the party's primary
                     // currency (uses the per-currency balances from the API).
@@ -343,10 +344,9 @@ export default function Dashboard() {
                           {formatCurrency(dispOutstanding, dispCur)}
                         </td>
                         <td className="py-3 px-4 text-right">
-                          <div className="font-medium text-slate-600">{formatINR(p.totalProfitINR ?? p.profit ?? 0)}</div>
-                          {partyUsdProfit > 0 && (
-                            <div className="text-[10px] font-semibold text-slate-400">{formatCurrency(partyUsdProfit, 'USD')} USD</div>
-                          )}
+                          <div className="font-medium text-slate-600">
+                            {formatCurrency(p.totalProfitUSD ?? (p.profitByCurrency?.USD?.profitForeign ?? 0), 'USD')}
+                          </div>
                         </td>
                         <td className="py-3 px-4 text-center">
                           <StatusBadge status={p.status || (p.outstanding > 0 ? 'partial' : 'settled')} />

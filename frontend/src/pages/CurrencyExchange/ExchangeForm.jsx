@@ -18,9 +18,21 @@ const exchangeSchema = z.object({
   netINRReceived: z.coerce.number().positive('Net INR received must be greater than 0'),
   exchangeDate: z.string().min(1, 'Exchange date is required'),
   party: z.string().optional(),
+  exchangePartyName: z.string().min(1, 'Currency exchange party name is required'),
+  paymentReceivedPercent: z.coerce.number().min(0, 'Percent must be 0 or more').max(100, 'Percent cannot exceed 100').default(100),
+  inrReceivedAmount: z.coerce.number().min(0, 'INR received cannot be negative').default(0),
   referenceNumber: z.string().optional(),
   notes: z.string().optional(),
 });
+
+// Quick-select options for how much of the exchange INR payment has been received
+const PERCENT_OPTIONS = [
+  { value: 100, label: 'Full (100%)' },
+  { value: 75, label: '75%' },
+  { value: 50, label: '50%' },
+  { value: 25, label: '25%' },
+  { value: 0, label: 'Pending (0%)' },
+];
 
 export default function ExchangeForm({ isOpen, onClose, exchange, onSuccess }) {
   const [parties, setParties] = useState([]);
@@ -44,6 +56,9 @@ export default function ExchangeForm({ isOpen, onClose, exchange, onSuccess }) {
       netINRReceived: '',
       exchangeDate: new Date().toISOString().split('T')[0],
       party: '',
+      exchangePartyName: '',
+      paymentReceivedPercent: 100,
+      inrReceivedAmount: 0,
       referenceNumber: '',
       notes: '',
     },
@@ -54,10 +69,28 @@ export default function ExchangeForm({ isOpen, onClose, exchange, onSuccess }) {
   const rate = parseFloat(watch('exchangeRate') || 0);
   const charges = parseFloat(watch('bankCharges') || 0);
   const netReceived = parseFloat(watch('netINRReceived') || 0);
+  const receivedPercent = parseFloat(watch('paymentReceivedPercent') || 0);
+  const manualInrReceived = parseFloat(watch('inrReceivedAmount') || 0);
+  const inrReceived = manualInrReceived > 0
+    ? Math.min(netReceived, parseFloat(manualInrReceived.toFixed(2)) || 0)
+    : Math.min(netReceived, parseFloat((netReceived * receivedPercent / 100).toFixed(2)) || 0);
+  const inrPendingAmount = Math.max(0, parseFloat((netReceived - inrReceived).toFixed(2)));
 
   const calculatedGross = foreignAmount * rate;
   const calculatedNet = Math.max(0, calculatedGross - charges);
   const diffFromCalculated = netReceived ? netReceived - calculatedNet : 0;
+
+  // Keep the manual "INR received" amount in sync whenever the total INR changes
+  // (e.g. auto-calculated from amount/rate/charges)
+  useEffect(() => {
+    if (netReceived > 0) {
+      const pctVal = parseFloat(watch('paymentReceivedPercent') || 0);
+      setValue('inrReceivedAmount', parseFloat((netReceived * pctVal / 100).toFixed(2)));
+    } else {
+      setValue('inrReceivedAmount', 0);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [netReceived]);
 
   // Load balances and parties
   useEffect(() => {
@@ -68,7 +101,9 @@ export default function ExchangeForm({ isOpen, onClose, exchange, onSuccess }) {
 
       getCurrencyBalances()
         .then((res) => {
-          const list = res.data.data || res.data || [];
+          const data = res.data.data || res.data || {};
+          // Use `holdings` (foreign only) for the exchange balance validation
+          const list = data.holdings || (Array.isArray(data) ? data : []);
           const map = {};
           if (Array.isArray(list)) {
             list.forEach((item) => {
@@ -88,7 +123,10 @@ export default function ExchangeForm({ isOpen, onClose, exchange, onSuccess }) {
           netINRReceived: exchange.netINRReceived ?? exchange.netINR ?? '',
           exchangeDate: exchange.exchangeDate ? new Date(exchange.exchangeDate).toISOString().split('T')[0] : '',
           party: exchange.party?._id || exchange.party || '',
-          referenceNumber: exchange.referenceNumber || '',
+          exchangePartyName: exchange.exchangePartyName || '',
+          paymentReceivedPercent: exchange.paymentReceivedPercent ?? 100,
+          inrReceivedAmount: exchange.inrReceivedAmount ?? 0,
+          referenceNumber: exchange.referenceNumber || exchange.bankReference || '',
           notes: exchange.notes || '',
         });
       } else {
@@ -100,6 +138,9 @@ export default function ExchangeForm({ isOpen, onClose, exchange, onSuccess }) {
           netINRReceived: '',
           exchangeDate: new Date().toISOString().split('T')[0],
           party: '',
+          exchangePartyName: '',
+          paymentReceivedPercent: 100,
+          inrReceivedAmount: 0,
           referenceNumber: '',
           notes: '',
         });
@@ -117,9 +158,18 @@ export default function ExchangeForm({ isOpen, onClose, exchange, onSuccess }) {
   const onSubmit = async (data) => {
     try {
       setSubmitting(true);
+      const pct = Math.min(100, Math.max(0, parseFloat(data.paymentReceivedPercent) || 0));
+      const netInr = parseFloat(data.netINRReceived) || 0;
+      // Manual INR-received entry takes precedence; otherwise derive from percent
+      const manualRecv = Math.min(netInr, Math.max(0, parseFloat(data.inrReceivedAmount) || 0));
+      const inrRecv = manualRecv > 0
+        ? parseFloat(manualRecv.toFixed(2))
+        : Math.min(netInr, parseFloat((netInr * pct / 100).toFixed(2)) || 0);
       const payload = {
         ...data,
         grossINR: calculatedGross,
+        inrReceivedAmount: inrRecv,
+        inrPendingAmount: Math.max(0, parseFloat((netInr - inrRecv).toFixed(2))),
       };
 
       if (exchange?._id) {
@@ -296,8 +346,110 @@ export default function ExchangeForm({ isOpen, onClose, exchange, onSuccess }) {
           </div>
         )}
 
+        {/* INR Payment Received Tracker */}
+        <div className="p-3 rounded-xl border border-green-200/80 bg-green-50/50 space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs font-bold text-slate-700">INR Payment Received from Exchange Party</p>
+              <p className="text-[11px] text-gray-500">How much of the total exchange amount have you received back? (Full payment, 50%, etc.)</p>
+            </div>
+            <ArrowRight size={16} className="text-green-500" />
+          </div>
+
+          <div className="flex flex-wrap gap-1.5">
+            {PERCENT_OPTIONS.map((p) => (
+              <button
+                key={p.value}
+                type="button"
+                onClick={() => {
+                  setValue('paymentReceivedPercent', p.value);
+                  if (netReceived > 0) setValue('inrReceivedAmount', parseFloat((netReceived * p.value / 100).toFixed(2)));
+                }}
+                className={`px-3 py-1 rounded-full text-[11px] font-semibold border transition-colors ${
+                  receivedPercent === p.value
+                    ? 'bg-green-600 text-white border-green-600'
+                    : 'bg-white text-slate-600 border-gray-200 hover:border-green-400'
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-3">
+            <input
+              type="number"
+              min="0"
+              max="100"
+              className="input w-24 text-xs font-bold"
+              {...register('paymentReceivedPercent', {
+                onChange: (e) => {
+                  const pctVal = Math.min(100, Math.max(0, parseFloat(e.target.value) || 0));
+                  if (netReceived > 0) setValue('inrReceivedAmount', parseFloat((netReceived * pctVal / 100).toFixed(2)));
+                },
+              })}
+            />
+            <span className="text-xs text-gray-500">% received</span>
+            {errors.paymentReceivedPercent && (
+              <p className="text-red-500 text-xs ml-1">{errors.paymentReceivedPercent.message}</p>
+            )}
+          </div>
+
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-gray-500">Or type INR received manually:</span>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 font-medium">₹</span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="40000.00"
+                className="input pl-8 w-40 text-xs font-bold"
+                {...register('inrReceivedAmount', {
+                  onChange: (e) => {
+                    const amtVal = Math.min(netReceived, Math.max(0, parseFloat(e.target.value) || 0));
+                    if (netReceived > 0) {
+                      setValue('paymentReceivedPercent', Math.min(100, Math.max(0, parseFloat((amtVal / netReceived * 100).toFixed(0)))));
+                    }
+                  },
+                })}
+              />
+            </div>
+            {errors.inrReceivedAmount && <p className="text-red-500 text-xs">{errors.inrReceivedAmount.message}</p>}
+          </div>
+
+          {netReceived > 0 && (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-center">
+              <div className="rounded-lg bg-white border border-gray-200 p-2">
+                <p className="text-[10px] text-gray-400">Total INR</p>
+                <p className="text-xs font-bold text-slate-800">{formatINR(netReceived)}</p>
+              </div>
+              <div className="rounded-lg bg-green-100 border border-green-200 p-2">
+                <p className="text-[10px] text-green-700">Received</p>
+                <p className="text-xs font-bold text-green-700">{formatINR(inrReceived)}</p>
+              </div>
+              <div className="rounded-lg bg-amber-50 border border-amber-200 p-2">
+                <p className="text-[10px] text-amber-700">Pending</p>
+                <p className="text-xs font-bold text-amber-700">{formatINR(inrPendingAmount)}</p>
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Optional Party & Reference */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="sm:col-span-2">
+            <label className="label">Currency Exchange Party (who gives you INR) *</label>
+            <input
+              type="text"
+              placeholder="e.g. M/s Sunrise Forex (Kolkata)"
+              className="input text-xs font-semibold"
+              {...register('exchangePartyName')}
+            />
+            <p className="text-[11px] text-gray-400 mt-1">You give them {selectedCurrency}, they give you INR.</p>
+            {errors.exchangePartyName && <p className="text-red-500 text-xs mt-1">{errors.exchangePartyName.message}</p>}
+          </div>
+
           <div>
             <label className="label">Associated Party (Optional)</label>
             <select className="input text-xs" {...register('party')}>

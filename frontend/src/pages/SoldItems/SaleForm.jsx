@@ -17,11 +17,11 @@ const saleSchema = z.object({
   productName: z.string().min(2, 'Product name must be at least 2 characters'),
   productDescription: z.string().optional(),
   quantity: z.coerce.number().min(1, 'Quantity must be at least 1').default(1),
-  saleAmountINR: z.coerce.number().positive('Sale price in INR must be greater than 0'),
-  foreignCurrency: z.string().min(1, 'Please select a foreign currency'),
-  saleAmountForeign: z.coerce.number().min(0, 'Sale amount foreign must be 0 or more').default(0),
-  estimatedProfitINR: z.coerce.number().default(0),
-  estimatedProfitForeign: z.coerce.number().default(0),
+  foreignCurrency: z.string().min(1, 'Please select a currency'),
+  saleAmountForeign: z.coerce.number().positive('Sale price must be greater than 0'),
+  estimatedProfitForeign: z.coerce.number().min(0, 'Estimated profit must be 0 or more').default(0),
+  homePriceCurrency: z.enum(['INR', 'USD']).default('INR'),
+  saleAmountINR: z.coerce.number().min(0, 'Home price must be 0 or more').default(0),
   notes: z.string().optional(),
 });
 
@@ -50,16 +50,17 @@ export default function SaleForm({ isOpen, onClose, sale, onSuccess }) {
       productName: '',
       productDescription: '',
       quantity: 1,
-      saleAmountINR: '',
       foreignCurrency: 'USD',
-      saleAmountForeign: 0,
-      estimatedProfitINR: 0,
+      saleAmountForeign: '',
       estimatedProfitForeign: 0,
+      homePriceCurrency: 'INR',
+      saleAmountINR: '',
       notes: '',
     },
   });
 
   const selectedCurrency = watch('foreignCurrency');
+const homePriceCurrency = watch('homePriceCurrency');
 
   const loadParties = async () => {
     try {
@@ -85,11 +86,11 @@ export default function SaleForm({ isOpen, onClose, sale, onSuccess }) {
           productName: sale.productName || sale.itemDetails?.name || '',
           productDescription: sale.productDescription || sale.itemDetails?.description || '',
           quantity: sale.quantity || 1,
-          saleAmountINR: sale.saleAmountINR ?? sale.amountINR ?? '',
           foreignCurrency: sale.foreignCurrency || sale.currency || 'USD',
-          saleAmountForeign: sale.saleAmountForeign ?? sale.amountForeign ?? 0,
-          estimatedProfitINR: sale.estimatedProfitINR ?? sale.profitINR ?? 0,
+          saleAmountForeign: sale.saleAmountForeign ?? sale.amountForeign ?? '',
           estimatedProfitForeign: sale.estimatedProfitForeign ?? sale.profitForeign ?? 0,
+          homePriceCurrency: sale.homePriceCurrency || 'INR',
+          saleAmountINR: sale.saleAmountINR ?? sale.amountINR ?? '',
           notes: sale.notes || '',
         });
       } else {
@@ -100,11 +101,11 @@ export default function SaleForm({ isOpen, onClose, sale, onSuccess }) {
           productName: '',
           productDescription: '',
           quantity: 1,
-          saleAmountINR: '',
           foreignCurrency: 'USD',
-          saleAmountForeign: 0,
-          estimatedProfitINR: 0,
+          saleAmountForeign: '',
           estimatedProfitForeign: 0,
+          homePriceCurrency: 'INR',
+          saleAmountINR: '',
           notes: '',
         });
       }
@@ -172,7 +173,7 @@ export default function SaleForm({ isOpen, onClose, sale, onSuccess }) {
           <div className="flex items-start gap-2.5 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs">
             <Info size={16} className="text-amber-600 flex-shrink-0 mt-0.5" />
             <div>
-              <span className="font-semibold">Dual Currency Recording:</span> The INR amount and Foreign Currency amount represent the <span className="underline font-semibold">same single sale transaction</span> (not two separate sales). This tracks invoices across domestic accounting and export receivables.
+              <span className="font-semibold">USD-First Recording:</span> Sale price and estimated profit are recorded in <span className="underline font-semibold">USD</span>. The optional <span className="underline font-semibold">Home Price</span> below tracks the domestic (INR) market value for reference only.
             </div>
           </div>
 
@@ -246,27 +247,12 @@ export default function SaleForm({ isOpen, onClose, sale, onSuccess }) {
             </div>
           </div>
 
-          {/* Price & Currency Representations */}
+          {/* Price & Valuation */}
           <div className="p-4 rounded-xl bg-gray-50 border border-gray-200/80 space-y-4">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">Price & Valuation</h3>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">Price & Valuation (USD)</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="label">Sale Price in INR (₹) *</label>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 font-medium">₹</span>
-                  <input
-                    type="number"
-                    step="0.01"
-                    placeholder="250000"
-                    className="input pl-8 font-semibold text-slate-800"
-                    {...register('saleAmountINR')}
-                  />
-                </div>
-                {errors.saleAmountINR && <p className="text-red-500 text-xs mt-1">{errors.saleAmountINR.message}</p>}
-              </div>
-
-              <div>
-                <label className="label">Foreign Currency & Price</label>
+                <label className="label">Sale Price ({selectedCurrency}) *</label>
                 <div className="flex gap-2">
                   <select className="input w-28 flex-shrink-0" {...register('foreignCurrency')}>
                     {CURRENCIES.map((c) => (
@@ -285,28 +271,41 @@ export default function SaleForm({ isOpen, onClose, sale, onSuccess }) {
               </div>
 
               <div>
-                <label className="label">Estimated Profit in INR (₹)</label>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 font-medium">₹</span>
-                  <input
-                    type="number"
-                    step="0.01"
-                    placeholder="35000"
-                    className="input pl-8"
-                    {...register('estimatedProfitINR')}
-                  />
-                </div>
-              </div>
-
-              <div>
                 <label className="label">Estimated Profit ({selectedCurrency})</label>
                 <input
                   type="number"
                   step="0.01"
                   placeholder="420.00"
-                  className="input"
+                  className="input font-semibold text-slate-800"
                   {...register('estimatedProfitForeign')}
                 />
+                {errors.estimatedProfitForeign && <p className="text-red-500 text-xs mt-1">{errors.estimatedProfitForeign.message}</p>}
+              </div>
+
+              <div className="sm:col-span-2">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="label mb-0">Home Price — Optional</label>
+                  <span className="text-[10px] text-gray-400 font-medium">Domestic market value (choose INR or USD)</span>
+                </div>
+                <div className="flex gap-2">
+                  <select className="input w-28 flex-shrink-0" {...register('homePriceCurrency')}>
+                    <option value="INR">INR (₹)</option>
+                    <option value="USD">USD ($)</option>
+                  </select>
+                  <div className="relative flex-1">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 font-medium">
+                      {homePriceCurrency === 'USD' ? '$' : '₹'}
+                    </span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      placeholder="250000"
+                      className="input pl-8 w-full"
+                      {...register('saleAmountINR')}
+                    />
+                  </div>
+                </div>
+                {errors.saleAmountINR && <p className="text-red-500 text-xs mt-1">{errors.saleAmountINR.message}</p>}
               </div>
             </div>
           </div>
