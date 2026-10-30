@@ -36,6 +36,7 @@ const PERCENT_OPTIONS = [
 
 export default function ExchangeForm({ isOpen, onClose, exchange, onSuccess }) {
   const [parties, setParties] = useState([]);
+  const [exchangeParties, setExchangeParties] = useState([]);
   const [balances, setBalances] = useState({});
   const [submitting, setSubmitting] = useState(false);
 
@@ -97,6 +98,10 @@ export default function ExchangeForm({ isOpen, onClose, exchange, onSuccess }) {
     if (isOpen) {
       getParties({ limit: 100 })
         .then((res) => setParties(res.data.data?.parties || res.data.data || res.data || []))
+        .catch(() => {});
+
+      getParties({ limit: 100, partyType: 'exchange' })
+        .then((res) => setExchangeParties(res.data.data?.parties || res.data.data || res.data || []))
         .catch(() => {});
 
       getCurrencyBalances()
@@ -440,13 +445,33 @@ export default function ExchangeForm({ isOpen, onClose, exchange, onSuccess }) {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="sm:col-span-2">
             <label className="label">Currency Exchange Party (who gives you INR) *</label>
-            <input
-              type="text"
-              placeholder="e.g. M/s Sunrise Forex (Kolkata)"
-              className="input text-xs font-semibold"
-              {...register('exchangePartyName')}
-            />
-            <p className="text-[11px] text-gray-400 mt-1">You give them {selectedCurrency}, they give you INR.</p>
+            {(exchangeParties.length > 0 || parties.length > 0) ? (
+              <select className="input text-xs font-semibold" {...register('exchangePartyName')}>
+                <option value="">-- Select Exchange Party --</option>
+                {exchangeParties.length > 0 && (
+                  <optgroup label="🔁 Exchange Parties">
+                    {exchangeParties.map((p) => (
+                      <option key={p._id} value={p.name}>{p.name}</option>
+                    ))}
+                  </optgroup>
+                )}
+                {parties.filter(p => !exchangeParties.find(ep => ep._id === p._id)).length > 0 && (
+                  <optgroup label="👤 Other Parties">
+                    {parties.filter(p => !exchangeParties.find(ep => ep._id === p._id)).map((p) => (
+                      <option key={p._id} value={p.name}>{p.name}</option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+            ) : (
+              <input
+                type="text"
+                placeholder="e.g. M/s Sunrise Forex"
+                className="input text-xs font-semibold"
+                {...register('exchangePartyName')}
+              />
+            )}
+            <p className="text-[11px] text-gray-400 mt-1">You give them {selectedCurrency}, they give you INR. Add exchange parties in the Parties section.</p>
             {errors.exchangePartyName && <p className="text-red-500 text-xs mt-1">{errors.exchangePartyName.message}</p>}
           </div>
 

@@ -1,20 +1,14 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { 
-  TrendingUp, 
-  DollarSign, 
-  CheckCircle, 
-  Clock, 
   Coins, 
   Search, 
   Filter, 
   ArrowUpRight, 
-  Wallet,
   Users
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import TopBar from '../../components/Layout/TopBar';
-import SummaryCard from '../../components/UI/SummaryCard';
 import StatusBadge from '../../components/UI/StatusBadge';
 import EmptyState from '../../components/UI/EmptyState';
 import LoadingSpinner, { PageLoader } from '../../components/UI/LoadingSpinner';
@@ -78,32 +72,6 @@ export default function Dashboard() {
     return <PageLoader />;
   }
 
-  // Format outstanding per currency (object -> array, e.g. {USD: 1500} -> [{currency:'USD', amount:1500}])
-  // Dashboard is USD-first, so INR receivables are omitted here.
-  const rawOutstanding = summary?.outstandingByCurrency || summary?.outstanding || {};
-  const outstandingList = (Array.isArray(rawOutstanding)
-    ? rawOutstanding
-    : Object.entries(rawOutstanding).map(([currency, amount]) => ({ currency, amount })))
-    .filter((item) => (item.currency || 'INR') !== 'INR');
-
-  // Per-currency profit breakdown for dual-currency display (INR + USD / other foreign)
-  const profitByCurrency = summary?.profitByCurrency || {};
-  const foreignProfitEntries = Object.entries(profitByCurrency).filter(
-    ([cur, p]) => cur !== 'INR' && parseFloat(p?.profitForeign || 0) !== 0
-  );
-  const foreignProfitText = foreignProfitEntries.map(([cur, p]) =>
-    `${formatCurrency(p.profitForeign, cur)} ${cur}`
-  ).join(' · ');
-
-  // Per-currency received breakdown so foreign payments show on the dashboard
-  const receivedByCurrency = summary?.paymentsByCurrency || summary?.receivedByCurrency || {};
-  const foreignReceivedEntries = Object.entries(receivedByCurrency).filter(
-    ([cur, p]) => cur !== 'INR' && parseFloat(p?.totalReceived || 0) !== 0
-  );
-  const foreignReceivedText = foreignReceivedEntries.map(([cur, p]) =>
-    `${formatCurrency(p.totalReceived, cur)} ${cur}`
-  ).join(' · ');
-
   return (
     <div className="pb-12">
       <TopBar title="Dashboard" subtitle="Overview of Sales, Cash Flows & Multi-Currency Positions">
@@ -135,72 +103,6 @@ export default function Dashboard() {
       </TopBar>
 
       <div className="p-6 space-y-6 max-w-7xl mx-auto">
-        {/* Summary Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-          <SummaryCard
-            title="Total Sales (USD)"
-            value={formatCurrency(summary?.totalSalesUSD || summary?.totalSales || 0, 'USD')}
-            subValue={`${summary?.totalSalesCount || 0} invoices recorded`}
-            icon={TrendingUp}
-            color="gold"
-          />
-          <SummaryCard
-            title="Est. Net Profit (USD)"
-            value={formatCurrency(summary?.totalProfitUSD || summary?.totalProfit || 0, 'USD')}
-            subValue={
-              foreignProfitText ? (
-                <span className="block space-y-0.5">
-                  <span>Estimated margin on sales</span>
-                  <span className="block font-bold text-green-600">{foreignProfitText}</span>
-                </span>
-              ) : (
-                'Estimated margin on sales'
-              )
-            }
-            icon={DollarSign}
-            color="green"
-          />
-          <SummaryCard
-            title="Total Received (USD)"
-            value={formatCurrency(summary?.totalReceivedUSD || summary?.totalReceived || 0, 'USD')}
-            subValue={
-              foreignReceivedText ? (
-                <span className="block space-y-0.5">
-                  <span>{summary?.paymentsCount || 0} payments credited</span>
-                  <span className="block font-bold text-blue-600">{foreignReceivedText}</span>
-                </span>
-              ) : (
-                `${summary?.paymentsCount || 0} payments credited`
-              )
-            }
-            icon={CheckCircle}
-            color="blue"
-          />
-          <div className="card">
-            <div className="flex items-start justify-between mb-2">
-              <div className="p-2.5 rounded-xl bg-purple-50 text-purple-600">
-                <Clock size={22} />
-              </div>
-              <span className="text-xs text-gray-400 font-medium">By Currency</span>
-            </div>
-            <p className="text-sm text-gray-500 mb-1">Outstanding Receivables</p>
-            <div className="space-y-1 mt-2">
-              {Array.isArray(outstandingList) && outstandingList.length > 0 ? (
-                outstandingList.slice(0, 3).map((item, idx) => (
-                  <div key={idx} className="flex justify-between items-center text-sm">
-                    <span className="font-semibold text-slate-700">{item.currency || 'INR'}:</span>
-                    <span className="font-bold text-red-600">{formatCurrency(item.amount || item.balance, item.currency)}</span>
-                  </div>
-                ))
-              ) : (
-                <p className="text-xl font-bold text-slate-800 leading-tight">
-                  {formatCurrency(summary?.totalOutstandingUSD || 0, 'USD')}
-                </p>
-              )}
-            </div>
-          </div>
-        </div>
-
         {/* Currency Holdings Panel */}
         <div className="card">
           <div className="flex items-center justify-between mb-4 border-b border-gray-100 pb-3">

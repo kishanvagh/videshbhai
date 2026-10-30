@@ -25,5 +25,6 @@ router.get('/:id', partyController.getParty);
 router.put('/:id', partyController.updateParty);
 router.get('/:id/ledger', partyController.getPartyLedger);
 router.get('/:id/balances', partyController.getPartyBalances);
+router.delete('/:id', partyController.deleteParty);
 
 module.exports = router;

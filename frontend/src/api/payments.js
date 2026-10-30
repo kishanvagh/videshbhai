@@ -4,6 +4,7 @@ export const getPayments = (params) => api.get('/payments', { params });
 export const createPayment = (data) => api.post('/payments', data);
 export const getPayment = (id) => api.get(`/payments/${id}`);
 export const reversePayment = (id, data) => api.post(`/payments/${id}/reverse`, data);
+export const deletePayment = (id) => api.delete(`/payments/${id}`);
 export const getOutstandingByParty = (partyId) => api.get(`/payments/outstanding/${partyId}`);
 
 /**

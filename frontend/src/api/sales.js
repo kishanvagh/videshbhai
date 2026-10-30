@@ -5,3 +5,4 @@ export const createSale = (data) => api.post('/sales', data);
 export const getSale = (id) => api.get(`/sales/${id}`);
 export const updateSale = (id, data) => api.put(`/sales/${id}`, data);
 export const cancelSale = (id, data) => api.post(`/sales/${id}/cancel`, data);
+export const deleteSale = (id) => api.delete(`/sales/${id}`);

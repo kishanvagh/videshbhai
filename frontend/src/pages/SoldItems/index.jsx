@@ -2,13 +2,11 @@ import { useState, useEffect } from 'react';
 import { 
   Plus, 
   Search, 
-  Filter, 
   ShoppingBag, 
   Edit, 
   Trash2, 
   Eye, 
   Ban,
-  Download
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import TopBar from '../../components/Layout/TopBar';
@@ -19,7 +17,7 @@ import ConfirmDialog from '../../components/UI/ConfirmDialog';
 import Modal from '../../components/UI/Modal';
 import LoadingSpinner, { PageLoader } from '../../components/UI/LoadingSpinner';
 import SaleForm from './SaleForm';
-import { getSales, cancelSale } from '../../api/sales';
+import { getSales, cancelSale, deleteSale } from '../../api/sales';
 import { getParties } from '../../api/parties';
 import { formatCurrency, formatDate, CURRENCIES } from '../../utils/formatters';
 
@@ -45,6 +43,8 @@ export default function SoldItems() {
   const [viewSaleModal, setViewSaleModal] = useState(null);
   const [saleToCancel, setSaleToCancel] = useState(null);
   const [cancelling, setCancelling] = useState(false);
+  const [saleToDelete, setSaleToDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
 
   const fetchSales = async () => {
     try {
@@ -123,6 +123,21 @@ export default function SoldItems() {
       toast.error(err.response?.data?.message || 'Failed to cancel sale invoice');
     } finally {
       setCancelling(false);
+    }
+  };
+
+  const handleDeleteSale = async () => {
+    if (!saleToDelete) return;
+    try {
+      setDeleting(true);
+      await deleteSale(saleToDelete._id);
+      toast.success('Sale deleted permanently');
+      setSaleToDelete(null);
+      fetchSales();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to delete sale');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -305,12 +320,21 @@ export default function SoldItems() {
                                   type="button"
                                   onClick={() => setSaleToCancel(sale)}
                                   title="Cancel invoice"
-                                  className="p-1 rounded hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors"
+                                  className="p-1 rounded hover:bg-red-50 text-gray-400 hover:text-orange-600 transition-colors"
                                 >
                                   <Ban size={15} />
                                 </button>
                               </>
                             )}
+
+                            <button
+                              type="button"
+                              onClick={() => setSaleToDelete(sale)}
+                              title="Delete permanently"
+                              className="p-1 rounded hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors"
+                            >
+                              <Trash2 size={15} />
+                            </button>
                           </div>
                         </td>
                       </tr>
@@ -436,6 +460,18 @@ export default function SoldItems() {
         confirmText="Cancel Invoice"
         confirmClassName="btn-danger"
         loading={cancelling}
+      />
+
+      {/* Delete Confirmation Dialog */}
+      <ConfirmDialog
+        isOpen={!!saleToDelete}
+        onClose={() => setSaleToDelete(null)}
+        onConfirm={handleDeleteSale}
+        title="Delete Sale Permanently?"
+        message={`Are you sure you want to permanently delete invoice "${saleToDelete?.invoiceNumber || ''}"? This cannot be undone.`}
+        confirmText="Delete Permanently"
+        confirmClassName="btn-danger"
+        loading={deleting}
       />
     </div>
   );

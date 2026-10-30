@@ -47,6 +47,11 @@ const partySchema = new mongoose.Schema({
   isActive: {
     type: Boolean,
     default: true
+  },
+  partyType: {
+    type: String,
+    enum: ['sales', 'exchange'],
+    default: 'sales'
   }
 }, {
   timestamps: true

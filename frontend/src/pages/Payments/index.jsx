@@ -9,7 +9,8 @@ import {
   Layers, 
   ArrowDownLeft,
   Calendar,
-  Wallet
+  Wallet,
+  Trash2
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import TopBar from '../../components/Layout/TopBar';
@@ -20,7 +21,7 @@ import ConfirmDialog from '../../components/UI/ConfirmDialog';
 import LoadingSpinner from '../../components/UI/LoadingSpinner';
 import PaymentForm from './PaymentForm';
 import AllocationView from './AllocationView';
-import { getPayments, reversePayment } from '../../api/payments';
+import { getPayments, reversePayment, deletePayment } from '../../api/payments';
 import { getParties, getPartyBalances } from '../../api/parties';
 import { getOutstandingReport } from '../../api/reports';
 import { formatCurrency, formatDate, CURRENCIES, PAYMENT_METHODS } from '../../utils/formatters';
@@ -55,6 +56,8 @@ export default function Payments() {
   const [selectedPaymentForAlloc, setSelectedPaymentForAlloc] = useState(null);
   const [paymentToReverse, setPaymentToReverse] = useState(null);
   const [reversing, setReversing] = useState(false);
+  const [paymentToDelete, setPaymentToDelete] = useState(null);
+  const [deletingPayment, setDeletingPayment] = useState(false);
 
   // Load parties list
   useEffect(() => {
@@ -176,6 +179,21 @@ export default function Payments() {
       toast.error(err.response?.data?.message || 'Failed to reverse payment');
     } finally {
       setReversing(false);
+    }
+  };
+
+  const handleDeletePayment = async () => {
+    if (!paymentToDelete) return;
+    try {
+      setDeletingPayment(true);
+      await deletePayment(paymentToDelete._id);
+      toast.success('Payment deleted permanently');
+      setPaymentToDelete(null);
+      fetchPaymentsHistory();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to delete payment');
+    } finally {
+      setDeletingPayment(false);
     }
   };
 
@@ -484,6 +502,14 @@ export default function Payments() {
                                   <RotateCcw size={15} />
                                 </button>
                               )}
+                              <button
+                                type="button"
+                                onClick={() => setPaymentToDelete(p)}
+                                title="Delete Payment"
+                                className="p-1.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors"
+                              >
+                                <Trash2 size={15} />
+                              </button>
                             </div>
                           </td>
                         </tr>
@@ -546,6 +572,18 @@ export default function Payments() {
         confirmText="Reverse Payment"
         confirmClassName="btn-danger"
         loading={reversing}
+      />
+
+      {/* Delete Payment Confirmation */}
+      <ConfirmDialog
+        isOpen={!!paymentToDelete}
+        onClose={() => setPaymentToDelete(null)}
+        onConfirm={handleDeletePayment}
+        title="Delete Payment Permanently?"
+        message={"Are you sure you want to permanently delete this payment? This cannot be undone."}
+        confirmText="Delete Permanently"
+        confirmClassName="btn-danger"
+        loading={deletingPayment}
       />
     </div>
   );

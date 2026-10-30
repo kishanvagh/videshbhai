@@ -23,5 +23,6 @@ router.post(
 router.get('/outstanding/:partyId', paymentController.getOutstandingByParty);
 router.get('/:id', paymentController.getPayment);
 router.post('/:id/reverse', paymentController.reversePayment);
+router.delete('/:id', paymentController.deletePayment);
 
 module.exports = router;

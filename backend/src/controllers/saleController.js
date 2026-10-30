@@ -336,10 +336,25 @@ const cancelSale = async (req, res, next) => {
   }
 };
 
+// @desc    Hard delete a sale
+// @route   DELETE /api/sales/:id
+const deleteSale = async (req, res, next) => {
+  try {
+    const sale = await Sale.findOne({ _id: req.params.id, user: req.user.id });
+    if (!sale) return error(res, 'Sale not found', 404);
+    // Also reverse/delete associated allocations
+    await PaymentAllocation.deleteMany({ sale: sale._id });
+    await Sale.deleteOne({ _id: req.params.id });
+    await AuditLog.create({ user: req.user.id, entityType: 'Sale', entityId: req.params.id, action: 'delete', before: sale.toObject(), ip: req.ip });
+    return success(res, null, 'Sale deleted successfully');
+  } catch (err) { next(err); }
+};
+
 module.exports = {
   getSales,
   createSale,
   getSale,
   updateSale,
-  cancelSale
+  cancelSale,
+  deleteSale
 };

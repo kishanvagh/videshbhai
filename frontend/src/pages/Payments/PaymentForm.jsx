@@ -5,7 +5,7 @@ import { z } from 'zod';
 import toast from 'react-hot-toast';
 import Modal from '../../components/UI/Modal';
 import LoadingSpinner from '../../components/UI/LoadingSpinner';
-import { getParties } from '../../api/parties';
+import { getParties, getPartyBalances } from '../../api/parties';
 import { createPayment } from '../../api/payments';
 import { CURRENCIES, PAYMENT_METHODS } from '../../utils/formatters';
 
@@ -23,11 +23,13 @@ export default function PaymentForm({ isOpen, onClose, onSuccess, initialPartyId
   const [parties, setParties] = useState([]);
   const [loadingParties, setLoadingParties] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [partyOutstanding, setPartyOutstanding] = useState(null);
 
   const {
     register,
     handleSubmit,
     reset,
+    watch,
     formState: { errors },
   } = useForm({
     resolver: zodResolver(paymentSchema),
@@ -66,6 +68,21 @@ export default function PaymentForm({ isOpen, onClose, onSuccess, initialPartyId
     }
   }, [isOpen, initialPartyId, initialCurrency, reset]);
 
+  // Fetch outstanding when party changes
+  const selectedParty = watch('party');
+  useEffect(() => {
+    if (selectedParty) {
+      getPartyBalances(selectedParty)
+        .then(res => {
+          const balances = res.data?.data?.balances || res.data?.balances || [];
+          setPartyOutstanding(balances);
+        })
+        .catch(() => setPartyOutstanding(null));
+    } else {
+      setPartyOutstanding(null);
+    }
+  }, [selectedParty]);
+
   const onSubmit = async (data) => {
     try {
       setSubmitting(true);
@@ -102,6 +119,20 @@ export default function PaymentForm({ isOpen, onClose, onSuccess, initialPartyId
               ))}
             </select>
             {errors.party && <p className="text-red-500 text-xs mt-1">{errors.party.message}</p>}
+            {partyOutstanding && partyOutstanding.length > 0 && (
+              <div className="mt-2 p-2.5 rounded-lg bg-amber-50 border border-amber-200">
+                <p className="text-xs font-semibold text-amber-800 mb-1">Outstanding Due:</p>
+                {partyOutstanding.filter(b => b.outstanding > 0).map(b => (
+                  <div key={b.currency} className="flex justify-between text-xs">
+                    <span className="text-amber-700">{b.currency}:</span>
+                    <span className="font-bold text-red-600">{b.outstanding.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                ))}
+                {partyOutstanding.every(b => b.outstanding <= 0) && (
+                  <p className="text-xs text-green-600 font-medium">✓ No outstanding balance</p>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Payment Date */}

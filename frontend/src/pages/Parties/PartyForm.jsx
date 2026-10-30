@@ -15,9 +15,10 @@ const schema = z.object({
   address: z.string().optional(),
   preferredCurrency: z.string().default('INR'),
   notes: z.string().optional(),
+  partyType: z.string().default('sales'),
 });
 
-export default function PartyForm({ party, onSuccess }) {
+export default function PartyForm({ party, onSuccess, defaultPartyType = 'sales' }) {
   const [loading, setLoading] = useState(false);
   const { register, handleSubmit, formState: { errors } } = useForm({
     resolver: zodResolver(schema),
@@ -30,7 +31,8 @@ export default function PartyForm({ party, onSuccess }) {
       address: party.address || '',
       preferredCurrency: party.preferredCurrency || 'INR',
       notes: party.notes || '',
-    } : { country: 'India', preferredCurrency: 'INR' },
+      partyType: party.partyType || 'sales',
+    } : { country: 'India', preferredCurrency: 'INR', partyType: defaultPartyType || 'sales' },
   });
 
   const onSubmit = async (data) => {
@@ -69,6 +71,13 @@ export default function PartyForm({ party, onSuccess }) {
           <label className="label">Preferred Currency</label>
           <select {...register('preferredCurrency')} className="input">
             {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+        <div className="col-span-2">
+          <label className="label">Party Type *</label>
+          <select {...register('partyType')} className="input">
+            <option value="sales">Sales Party (Customer)</option>
+            <option value="exchange">Currency Exchange Party (Forex Agent)</option>
           </select>
         </div>
         <div>

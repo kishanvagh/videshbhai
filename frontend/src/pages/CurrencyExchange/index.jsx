@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   ArrowLeftRight, 
   Plus, 
@@ -8,7 +8,10 @@ import {
   Edit, 
   RotateCcw, 
   TrendingUp, 
-  Receipt
+  Receipt,
+  Trash2,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import TopBar from '../../components/Layout/TopBar';
@@ -18,7 +21,15 @@ import Pagination from '../../components/UI/Pagination';
 import ConfirmDialog from '../../components/UI/ConfirmDialog';
 import LoadingSpinner from '../../components/UI/LoadingSpinner';
 import ExchangeForm from './ExchangeForm';
-import { getExchanges, reverseExchange, getCurrencyBalances } from '../../api/exchanges';
+import {
+  getExchanges,
+  reverseExchange,
+  deleteExchange,
+  getCurrencyBalances,
+  getExchangeINRPayments,
+  addExchangeINRPayment,
+  deleteExchangeINRPayment,
+} from '../../api/exchanges';
 import { getParties } from '../../api/parties';
 import { formatCurrency, formatINR, formatDate, CURRENCIES } from '../../utils/formatters';
 
@@ -42,6 +53,19 @@ export default function CurrencyExchange() {
   const [selectedExchange, setSelectedExchange] = useState(null);
   const [exchangeToReverse, setExchangeToReverse] = useState(null);
   const [reversing, setReversing] = useState(false);
+
+  // Delete exchange
+  const [exchangeToDelete, setExchangeToDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+
+  // INR installment payments
+  const [expandedExchange, setExpandedExchange] = useState(null);
+  const [inrPayments, setInrPayments] = useState({});
+  const [showAddPayment, setShowAddPayment] = useState(null);
+  const [newPaymentAmount, setNewPaymentAmount] = useState('');
+  const [newPaymentDate, setNewPaymentDate] = useState(new Date().toISOString().split('T')[0]);
+  const [newPaymentNote, setNewPaymentNote] = useState('');
+  const [addingPayment, setAddingPayment] = useState(false);
 
   const fetchBalances = async () => {
     try {
@@ -124,6 +148,76 @@ export default function CurrencyExchange() {
     }
   };
 
+  const handleDeleteExchange = async () => {
+    if (!exchangeToDelete) return;
+    try {
+      setDeleting(true);
+      await deleteExchange(exchangeToDelete._id);
+      toast.success('Exchange deleted successfully');
+      setExchangeToDelete(null);
+      fetchExchanges();
+      fetchBalances();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to delete exchange');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const toggleINRPayments = async (ex) => {
+    if (expandedExchange === ex._id) {
+      setExpandedExchange(null);
+      return;
+    }
+    setExpandedExchange(ex._id);
+    if (!inrPayments[ex._id]) {
+      try {
+        const res = await getExchangeINRPayments(ex._id);
+        setInrPayments(prev => ({ ...prev, [ex._id]: res.data?.data || [] }));
+      } catch {
+        setInrPayments(prev => ({ ...prev, [ex._id]: [] }));
+      }
+    }
+  };
+
+  const handleAddINRPayment = async (exchangeId) => {
+    if (!newPaymentAmount || parseFloat(newPaymentAmount) <= 0) {
+      toast.error('Please enter a valid amount');
+      return;
+    }
+    try {
+      setAddingPayment(true);
+      const res = await addExchangeINRPayment(exchangeId, {
+        amountINR: parseFloat(newPaymentAmount),
+        paymentDate: newPaymentDate,
+        notes: newPaymentNote,
+      });
+      toast.success('INR payment recorded');
+      setInrPayments(prev => ({ ...prev, [exchangeId]: [...(prev[exchangeId] || []), res.data?.data?.payment] }));
+      setShowAddPayment(null);
+      setNewPaymentAmount('');
+      setNewPaymentNote('');
+      fetchExchanges();
+      fetchBalances();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to add payment');
+    } finally {
+      setAddingPayment(false);
+    }
+  };
+
+  const handleDeleteINRPayment = async (exchangeId, paymentId) => {
+    try {
+      await deleteExchangeINRPayment(exchangeId, paymentId);
+      toast.success('Payment deleted');
+      setInrPayments(prev => ({ ...prev, [exchangeId]: (prev[exchangeId] || []).filter(p => p._id !== paymentId) }));
+      fetchExchanges();
+      fetchBalances();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to delete payment');
+    }
+  };
+
   return (
     <div className="pb-12">
       <TopBar title="Currency Exchange" subtitle="Manage foreign currency holdings, conversions & INR settlements">
@@ -133,7 +227,7 @@ export default function CurrencyExchange() {
       </TopBar>
 
       <div className="p-6 space-y-6 max-w-7xl mx-auto">
-        {/* Wallet Cards */}
+        {/* Wallet Cards – INR excluded */}
         <div>
           <div className="flex items-center gap-2 mb-3">
             <Coins size={18} className="text-gold-500" />
@@ -142,13 +236,12 @@ export default function CurrencyExchange() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {holdings.length > 0 ? (
-              holdings.map((h) => {
+            {holdings.filter(h => h.currency !== 'INR').length > 0 ? (
+              holdings.filter(h => h.currency !== 'INR').map((h) => {
                 const bal = parseFloat(h.currentHolding ?? h.currentBalance ?? h.balance ?? 0);
                 const isPositive = bal > 0;
-                const isINR = h.currency === 'INR';
                 return (
-                  <div key={h.currency} className={`card p-4 relative overflow-hidden ${isINR ? 'border-gold-300' : ''}`}>
+                  <div key={h.currency} className="card p-4 relative overflow-hidden">
                     <div className="flex justify-between items-start mb-2">
                       <span className="px-2.5 py-1 rounded bg-navy-50 text-navy-700 font-bold text-xs uppercase tracking-wide">
                         {h.currency}
@@ -156,7 +249,7 @@ export default function CurrencyExchange() {
                       <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
                         isPositive ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
                       }`}>
-                        {isINR ? 'Wallet' : (isPositive ? 'Available' : 'Low / Zero')}
+                        {isPositive ? 'Available' : 'Low / Zero'}
                       </span>
                     </div>
 
@@ -167,19 +260,13 @@ export default function CurrencyExchange() {
 
                     <div className="mt-3 pt-3 border-t border-gray-100 grid grid-cols-2 gap-2 text-[11px] text-gray-500">
                       <div>
-                        <span className="block text-gray-400">{isINR ? 'Received (Payments):' : 'Total Received:'}</span>
+                        <span className="block text-gray-400">Total Received:</span>
                         <span className="font-semibold text-slate-700">{formatCurrency(h.totalReceived || 0, h.currency)}</span>
                       </div>
                       <div>
-                        <span className="block text-gray-400">{isINR ? 'Received from Exch.:' : 'Exchanged to INR:'}</span>
-                        <span className="font-semibold text-slate-700">{formatCurrency(h.netINRFromExchanges || h.totalExchanged || 0, isINR ? 'INR' : h.currency)}</span>
+                        <span className="block text-gray-400">Exchanged to INR:</span>
+                        <span className="font-semibold text-slate-700">{formatCurrency(h.netINRFromExchanges || h.totalExchanged || 0, h.currency)}</span>
                       </div>
-                      {isINR && parseFloat(h.pendingFromExchanges || 0) > 0 && (
-                        <div className="col-span-2 mt-1 pt-1.5 border-t border-amber-200 bg-amber-50 rounded-md px-2 py-1.5 flex items-center justify-between">
-                          <span className="text-amber-700 font-semibold">Due from Exchange Parties</span>
-                          <span className="font-bold text-amber-700">{formatINR(h.pendingFromExchanges)}</span>
-                        </div>
-                      )}
                     </div>
                   </div>
                 );
@@ -303,71 +390,144 @@ export default function CurrencyExchange() {
                     const isRev = ex.status === 'reversed';
 
                     return (
-                      <tr key={ex._id} className={`hover:bg-gray-50/80 transition-colors ${isRev ? 'opacity-50 bg-gray-50' : ''}`}>
-                        <td className="py-3 px-4 text-xs text-gray-600 whitespace-nowrap">
-                          {formatDate(ex.exchangeDate || ex.createdAt)}
-                        </td>
-                        <td className="py-3 px-4 font-medium text-slate-800 text-xs">
-                          {partyName}
-                        </td>
-                        <td className="py-3 px-4 font-semibold text-slate-800 text-xs">
-                          {ex.exchangePartyName || '-'}
-                        </td>
-                        <td className="py-3 px-4">
-                          <span className="px-2 py-0.5 rounded bg-gray-100 text-slate-700 font-bold text-xs">
-                            {cur}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4 text-right font-bold text-slate-800">
-                          {formatCurrency(amount, cur)}
-                        </td>
-                        <td className="py-3 px-4 text-right text-xs text-slate-700 font-mono">
-                          ₹{(ex.exchangeRate ?? ex.rate ?? 0).toFixed(2)}
-                        </td>
-                        <td className="py-3 px-4 text-right font-medium text-slate-600 text-xs">
-                          {formatINR(ex.grossINR || (amount * (ex.exchangeRate || 0)))}
-                        </td>
-                        <td className="py-3 px-4 text-right text-xs text-red-600">
-                          {ex.bankCharges ? `-${formatINR(ex.bankCharges)}` : '-'}
-                        </td>
-                        <td className="py-3 px-4 text-right font-bold text-green-600">
-                          {formatINR(ex.netINRReceived ?? ex.netINR ?? 0)}
-                        </td>
-                        <td className="py-3 px-4 text-right font-bold text-green-600">
-                          {formatINR(ex.inrReceivedAmount ?? 0)}
-                          {parseFloat(ex.inrPendingAmount || 0) > 0 && (
-                            <span className="block text-[10px] text-amber-600">Pending: {formatINR(ex.inrPendingAmount)}</span>
-                          )}
-                          <span className="block text-[10px] text-gray-400">{ex.paymentReceivedPercent || 0}% received</span>
-                        </td>
-                        <td className="py-3 px-4 text-xs font-mono text-gray-500">
-                          {ex.referenceNumber || '-'}
-                        </td>
-                        <td className="py-3 px-4 text-right">
-                          {!isRev ? (
-                            <div className="flex items-center justify-end gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => handleOpenEdit(ex)}
-                                title="Edit Conversion"
-                                className="p-1 rounded hover:bg-gray-100 text-gray-600 hover:text-blue-600 transition-colors"
-                              >
-                                <Edit size={14} />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setExchangeToReverse(ex)}
-                                title="Reverse Conversion"
-                                className="p-1 rounded hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors"
-                              >
-                                <RotateCcw size={14} />
-                              </button>
-                            </div>
-                          ) : (
-                            <StatusBadge status="reversed" />
-                          )}
-                        </td>
-                      </tr>
+                      <React.Fragment key={ex._id}>
+                        <tr className={`hover:bg-gray-50/80 transition-colors ${isRev ? 'opacity-50 bg-gray-50' : ''}`}>
+                          <td className="py-3 px-4 text-xs text-gray-600 whitespace-nowrap">
+                            {formatDate(ex.exchangeDate || ex.createdAt)}
+                          </td>
+                          <td className="py-3 px-4 font-medium text-slate-800 text-xs">
+                            {partyName}
+                          </td>
+                          <td className="py-3 px-4 font-semibold text-slate-800 text-xs">
+                            {ex.exchangePartyName || '-'}
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className="px-2 py-0.5 rounded bg-gray-100 text-slate-700 font-bold text-xs">
+                              {cur}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-right font-bold text-slate-800">
+                            {formatCurrency(amount, cur)}
+                          </td>
+                          <td className="py-3 px-4 text-right text-xs text-slate-700 font-mono">
+                            ₹{(ex.exchangeRate ?? ex.rate ?? 0).toFixed(2)}
+                          </td>
+                          <td className="py-3 px-4 text-right font-medium text-slate-600 text-xs">
+                            {formatINR(ex.grossINR || (amount * (ex.exchangeRate || 0)))}
+                          </td>
+                          <td className="py-3 px-4 text-right text-xs text-red-600">
+                            {ex.bankCharges ? `-${formatINR(ex.bankCharges)}` : '-'}
+                          </td>
+                          <td className="py-3 px-4 text-right font-bold text-green-600">
+                            {formatINR(ex.netINRReceived ?? ex.netINR ?? 0)}
+                          </td>
+                          <td className="py-3 px-4 text-right font-bold text-green-600">
+                            {formatINR(ex.inrReceivedAmount ?? 0)}
+                            {parseFloat(ex.inrPendingAmount || 0) > 0 && (
+                              <span className="block text-[10px] text-amber-600">Pending: {formatINR(ex.inrPendingAmount)}</span>
+                            )}
+                            <span className="block text-[10px] text-gray-400">{ex.paymentReceivedPercent || 0}% received</span>
+                            <button
+                              onClick={() => toggleINRPayments(ex)}
+                              className="text-[10px] text-gold-600 hover:underline mt-0.5 flex items-center gap-0.5"
+                            >
+                              {expandedExchange === ex._id ? <><ChevronUp size={10}/> Hide</> : <><ChevronDown size={10}/> Installments</>}
+                            </button>
+                          </td>
+                          <td className="py-3 px-4 text-xs font-mono text-gray-500">
+                            {ex.referenceNumber || '-'}
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            {!isRev ? (
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenEdit(ex)}
+                                  title="Edit Conversion"
+                                  className="p-1 rounded hover:bg-gray-100 text-gray-600 hover:text-blue-600 transition-colors"
+                                >
+                                  <Edit size={14} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setExchangeToReverse(ex)}
+                                  title="Reverse Conversion"
+                                  className="p-1 rounded hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors"
+                                >
+                                  <RotateCcw size={14} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setExchangeToDelete(ex)}
+                                  title="Delete Exchange"
+                                  className="p-1 rounded hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            ) : (
+                              <StatusBadge status="reversed" />
+                            )}
+                          </td>
+                        </tr>
+
+                        {expandedExchange === ex._id && (
+                          <tr key={`inr-${ex._id}`}>
+                            <td colSpan={12} className="bg-amber-50/60 border-b border-amber-100 px-6 py-3">
+                              <div className="space-y-2">
+                                <div className="flex items-center justify-between">
+                                  <p className="text-xs font-bold text-amber-800">INR Payment Installments</p>
+                                  <button
+                                    onClick={() => setShowAddPayment(showAddPayment === ex._id ? null : ex._id)}
+                                    className="text-xs text-gold-600 hover:underline font-semibold flex items-center gap-1"
+                                  >
+                                    <Plus size={12} /> Add Payment
+                                  </button>
+                                </div>
+                                {showAddPayment === ex._id && (
+                                  <div className="flex flex-wrap items-end gap-2 p-2 bg-white rounded-lg border border-amber-200">
+                                    <div>
+                                      <p className="text-[10px] text-gray-400 mb-0.5">Date</p>
+                                      <input type="date" value={newPaymentDate} onChange={e => setNewPaymentDate(e.target.value)} className="input text-xs py-1 w-36" />
+                                    </div>
+                                    <div>
+                                      <p className="text-[10px] text-gray-400 mb-0.5">Amount (₹)</p>
+                                      <input type="number" step="0.01" placeholder="50000" value={newPaymentAmount} onChange={e => setNewPaymentAmount(e.target.value)} className="input text-xs py-1 w-32 font-bold" />
+                                    </div>
+                                    <div>
+                                      <p className="text-[10px] text-gray-400 mb-0.5">Note</p>
+                                      <input type="text" placeholder="Optional note" value={newPaymentNote} onChange={e => setNewPaymentNote(e.target.value)} className="input text-xs py-1 w-36" />
+                                    </div>
+                                    <button onClick={() => handleAddINRPayment(ex._id)} disabled={addingPayment} className="btn-primary text-xs py-1 px-3">
+                                      {addingPayment ? 'Saving...' : 'Save'}
+                                    </button>
+                                    <button onClick={() => setShowAddPayment(null)} className="btn-secondary text-xs py-1 px-3">Cancel</button>
+                                  </div>
+                                )}
+                                {(inrPayments[ex._id] || []).length === 0 ? (
+                                  <p className="text-xs text-gray-400 italic">No installment payments recorded yet.</p>
+                                ) : (
+                                  <table className="w-full text-xs">
+                                    <thead><tr className="text-gray-400"><th className="text-left py-1">Date</th><th className="text-right py-1">Amount (₹)</th><th className="text-left py-1">Note</th><th className="py-1"></th></tr></thead>
+                                    <tbody>
+                                      {(inrPayments[ex._id] || []).map(p => (
+                                        <tr key={p._id} className="border-t border-amber-100">
+                                          <td className="py-1 text-gray-600">{p.paymentDate ? new Date(p.paymentDate).toLocaleDateString('en-IN') : '-'}</td>
+                                          <td className="py-1 text-right font-bold text-green-700">₹{parseFloat(p.amountINR).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                                          <td className="py-1 text-gray-500">{p.notes || '-'}</td>
+                                          <td className="py-1 text-right">
+                                            <button onClick={() => handleDeleteINRPayment(ex._id, p._id)} className="text-red-400 hover:text-red-600 p-0.5 rounded hover:bg-red-50"><Trash2 size={12} /></button>
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
                     );
                   })
                 ) : (
@@ -415,6 +575,18 @@ export default function CurrencyExchange() {
         confirmText="Reverse Exchange"
         confirmClassName="btn-danger"
         loading={reversing}
+      />
+
+      {/* Delete Exchange Dialog */}
+      <ConfirmDialog
+        isOpen={!!exchangeToDelete}
+        onClose={() => setExchangeToDelete(null)}
+        onConfirm={handleDeleteExchange}
+        title="Delete Exchange Record?"
+        message={`Are you sure you want to permanently delete this exchange record? This cannot be undone.`}
+        confirmText="Delete Permanently"
+        confirmClassName="btn-danger"
+        loading={deleting}
       />
     </div>
   );

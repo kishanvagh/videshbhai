@@ -4,12 +4,13 @@ import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, MapPin, Mail, Phone, Globe } from 'lucide-react';
 import { getParty, getPartyLedger, getPartyBalances } from '../../api/parties';
 import { getSales } from '../../api/sales';
+import { getExchanges } from '../../api/exchanges';
 import { getPayments } from '../../api/payments';
 import TopBar from '../../components/Layout/TopBar';
 import { PageLoader } from '../../components/UI/LoadingSpinner';
 import { formatCurrency, formatDate, getCurrencySymbol } from '../../utils/formatters';
 
-const TABS = ['Balances', 'Ledger', 'Sales', 'Payments'];
+const TABS = ['Balances', 'Ledger', 'Sales', 'Payments', 'Exchanges'];
 
 export default function PartyDetail() {
   const { id } = useParams();
@@ -38,10 +39,16 @@ export default function PartyDetail() {
     enabled: tab === 'Payments',
   });
 
+  const { data: exchangesData } = useQuery({
+    queryKey: ['party-exchanges', id],
+    queryFn: () => getExchanges({ party: id, limit: 100 }),
+    enabled: tab === 'Exchanges',
+  });
+
   if (partyLoading) return <PageLoader />;
 
-  const party = partyData?.data?.party;
-  const balances = partyData?.data?.balances || [];
+  const party = partyData?.data?.data?.party;
+  const balances = partyData?.data?.data?.balances || partyData?.data?.balances || [];
 
   if (!party) return <div className="p-6 text-gray-500">Party not found</div>;
 
@@ -155,7 +162,7 @@ export default function PartyDetail() {
                     </tr>
                   </thead>
                   <tbody>
-                    {ledgerData?.data?.ledger?.map((entry, i) => (
+                    {(ledgerData?.data?.data?.ledger || ledgerData?.data?.ledger || []).map((entry, i) => (
                       <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
                         <td className="py-2 px-3 text-gray-600">{formatDate(entry.date)}</td>
                         <td className="py-2 px-3">
@@ -192,6 +199,10 @@ export default function PartyDetail() {
           {tab === 'Sales' && (
             <div className="overflow-x-auto">
               {!salesData ? <PageLoader /> : (
+                (() => {
+                  const salesList = salesData?.data?.data?.sales || salesData?.data?.sales || [];
+                  if (salesList.length === 0) return <p className="text-sm text-gray-400 text-center py-8">No sales recorded for this party.</p>;
+                  return (
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-gray-100">
@@ -204,7 +215,7 @@ export default function PartyDetail() {
                     </tr>
                   </thead>
                   <tbody>
-                    {salesData?.data?.sales?.map((s) => (
+                    {salesList.map((s) => (
                       <tr key={s._id} className="border-b border-gray-50 hover:bg-gray-50">
                         <td className="py-2 px-3 font-mono text-xs text-blue-600">{s.invoiceNumber}</td>
                         <td className="py-2 px-3 text-gray-600">{formatDate(s.saleDate)}</td>
@@ -227,6 +238,8 @@ export default function PartyDetail() {
                     ))}
                   </tbody>
                 </table>
+                  );
+                })()
               )}
             </div>
           )}
@@ -235,6 +248,10 @@ export default function PartyDetail() {
           {tab === 'Payments' && (
             <div className="overflow-x-auto">
               {!paymentsData ? <PageLoader /> : (
+                (() => {
+                  const paymentsList = paymentsData?.data?.data?.payments || paymentsData?.data?.payments || [];
+                  if (paymentsList.length === 0) return <p className="text-sm text-gray-400 text-center py-8">No payments recorded for this party.</p>;
+                  return (
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-gray-100">
@@ -247,7 +264,7 @@ export default function PartyDetail() {
                     </tr>
                   </thead>
                   <tbody>
-                    {paymentsData?.data?.payments?.map((p) => (
+                    {paymentsList.map((p) => (
                       <tr key={p._id} className={`border-b border-gray-50 hover:bg-gray-50 ${p.isReversed ? 'opacity-50' : ''}`}>
                         <td className="py-2 px-3 text-gray-600">{formatDate(p.paymentDate)}</td>
                         <td className="py-2 px-3 text-right font-semibold text-green-600">{formatCurrency(p.amountReceived, p.currency)}</td>
@@ -267,6 +284,61 @@ export default function PartyDetail() {
                     ))}
                   </tbody>
                 </table>
+                  );
+                })()
+              )}
+            </div>
+          )}
+
+          {/* Exchanges Tab */}
+          {tab === 'Exchanges' && (
+            <div className="overflow-x-auto">
+              {!exchangesData ? <PageLoader /> : (
+                (() => {
+                  const exchanges = exchangesData?.data?.data?.exchanges || exchangesData?.data?.exchanges || [];
+                  if (exchanges.length === 0) return (
+                    <p className="text-sm text-gray-400 text-center py-6">No exchange records found for this party.</p>
+                  );
+                  return (
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-gray-100">
+                          <th className="text-left py-2 px-3 text-gray-500 font-medium">Date</th>
+                          <th className="text-left py-2 px-3 text-gray-500 font-medium">Currency</th>
+                          <th className="text-right py-2 px-3 text-gray-500 font-medium">Amount</th>
+                          <th className="text-right py-2 px-3 text-gray-500 font-medium">Rate</th>
+                          <th className="text-right py-2 px-3 text-gray-500 font-medium">Net INR</th>
+                          <th className="text-right py-2 px-3 text-gray-500 font-medium">Received</th>
+                          <th className="text-right py-2 px-3 text-gray-500 font-medium">Pending</th>
+                          <th className="text-left py-2 px-3 text-gray-500 font-medium">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {exchanges.map((ex) => {
+                          const isPending = (ex.inrPendingAmount || 0) > 0.01;
+                          return (
+                            <tr key={ex._id} className="border-b border-gray-50 hover:bg-gray-50">
+                              <td className="py-2 px-3 text-gray-600">{formatDate(ex.exchangeDate)}</td>
+                              <td className="py-2 px-3">
+                                <span className="text-xs font-medium bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded">{ex.foreignCurrency}</span>
+                              </td>
+                              <td className="py-2 px-3 text-right font-semibold">{formatCurrency(ex.foreignAmountExchanged, ex.foreignCurrency)}</td>
+                              <td className="py-2 px-3 text-right text-gray-600">&#8377;{parseFloat(ex.exchangeRate || 0).toFixed(2)}</td>
+                              <td className="py-2 px-3 text-right font-bold text-slate-800">{formatCurrency(ex.netINRReceived, 'INR')}</td>
+                              <td className="py-2 px-3 text-right text-green-600 font-medium">{formatCurrency(ex.inrReceivedAmount || 0, 'INR')}</td>
+                              <td className={`py-2 px-3 text-right font-medium ${isPending ? 'text-amber-600' : 'text-green-600'}`}>{formatCurrency(ex.inrPendingAmount || 0, 'INR')}</td>
+                              <td className="py-2 px-3">
+                                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${isPending ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
+                                  {isPending ? `${ex.paymentReceivedPercent || 0}% received` : 'Fully Received'}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  );
+                })()
               )}
             </div>
           )}

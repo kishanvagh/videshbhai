@@ -376,10 +376,31 @@ const getOutstandingByParty = async (req, res, next) => {
   }
 };
 
+// @desc    Hard delete a payment
+// @route   DELETE /api/payments/:id
+const deletePayment = async (req, res, next) => {
+  try {
+    const payment = await Payment.findOne({ _id: req.params.id, user: req.user.id });
+    if (!payment) return error(res, 'Payment not found', 404);
+    // Also delete associated allocations and recalculate affected sales
+    const allocations = await PaymentAllocation.find({ payment: payment._id });
+    const saleIds = allocations.map(a => a.sale);
+    await PaymentAllocation.deleteMany({ payment: payment._id });
+    await Payment.deleteOne({ _id: req.params.id });
+    // Recalculate status for affected sales
+    for (const saleId of saleIds) {
+      await accountingService.recalculateSaleStatus(saleId);
+    }
+    await AuditLog.create({ user: req.user.id, entityType: 'Payment', entityId: req.params.id, action: 'delete', before: payment.toObject(), ip: req.ip });
+    return success(res, null, 'Payment deleted successfully');
+  } catch (err) { next(err); }
+};
+
 module.exports = {
   getPayments,
   createPayment,
   getPayment,
   reversePayment,
-  getOutstandingByParty
+  getOutstandingByParty,
+  deletePayment
 };

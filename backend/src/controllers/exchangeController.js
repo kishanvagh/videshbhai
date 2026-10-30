@@ -209,4 +209,16 @@ const reverseExchange = async (req, res, next) => {
   }
 };
 
-module.exports = { getExchanges, getCurrencyBalances, createExchange, updateExchange, reverseExchange };
+// @desc    Hard delete a currency exchange
+// @route   DELETE /api/exchanges/:id
+const deleteExchange = async (req, res, next) => {
+  try {
+    const exchange = await CurrencyExchange.findOne({ _id: req.params.id, user: req.user.id });
+    if (!exchange) return error(res, 'Exchange not found', 404);
+    await CurrencyExchange.deleteOne({ _id: req.params.id });
+    await AuditLog.create({ user: req.user.id, entityType: 'CurrencyExchange', entityId: req.params.id, action: 'delete', before: exchange.toObject(), ip: req.ip });
+    return success(res, null, 'Exchange deleted successfully');
+  } catch (err) { next(err); }
+};
+
+module.exports = { getExchanges, getCurrencyBalances, createExchange, updateExchange, reverseExchange, deleteExchange };

@@ -24,5 +24,6 @@ router.post(
 router.get('/:id', saleController.getSale);
 router.put('/:id', saleController.updateSale);
 router.post('/:id/cancel', saleController.cancelSale);
+router.delete('/:id', saleController.deleteSale);
 
 module.exports = router;

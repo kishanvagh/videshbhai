@@ -36,6 +36,10 @@ const getParties = async (req, res, next) => {
       filter.preferredCurrency = req.query.currency;
     }
 
+    if (req.query.partyType) {
+      filter.partyType = req.query.partyType;
+    }
+
     const total = await Party.countDocuments(filter);
     const parties = await Party.find(filter)
       .sort({ name: 1 })
@@ -69,7 +73,8 @@ const createParty = async (req, res, next) => {
       phone,
       address,
       preferredCurrency,
-      notes
+      notes,
+      partyType
     } = req.body;
 
     if (!name) {
@@ -94,7 +99,8 @@ const createParty = async (req, res, next) => {
       phone,
       address,
       preferredCurrency: preferredCurrency || 'INR',
-      notes
+      notes,
+      partyType: partyType || 'sales'
     });
 
     // Create Audit Log
@@ -163,7 +169,8 @@ const updateParty = async (req, res, next) => {
       'address',
       'preferredCurrency',
       'notes',
-      'isActive'
+      'isActive',
+      'partyType'
     ];
 
     allowedUpdates.forEach((field) => {
@@ -355,11 +362,24 @@ const getPartyBalances = async (req, res, next) => {
   }
 };
 
+// @desc    Hard delete a party
+// @route   DELETE /api/parties/:id
+const deleteParty = async (req, res, next) => {
+  try {
+    const party = await Party.findOne({ _id: req.params.id, user: req.user.id });
+    if (!party) return error(res, 'Party not found', 404);
+    await Party.deleteOne({ _id: req.params.id });
+    await AuditLog.create({ user: req.user.id, entityType: 'Party', entityId: req.params.id, action: 'delete', before: party.toObject(), ip: req.ip });
+    return success(res, null, 'Party deleted successfully');
+  } catch (err) { next(err); }
+};
+
 module.exports = {
   getParties,
   createParty,
   getParty,
   updateParty,
   getPartyLedger,
-  getPartyBalances
+  getPartyBalances,
+  deleteParty
 };
