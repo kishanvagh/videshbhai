@@ -1,48 +1,65 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, MapPin, Mail, Phone, Globe } from 'lucide-react';
 import { getParty, getPartyLedger, getPartyBalances } from '../../api/parties';
 import { getSales } from '../../api/sales';
-import { getExchanges } from '../../api/exchanges';
+import { getExchanges, getExchangeINRPayments } from '../../api/exchanges';
 import { getPayments } from '../../api/payments';
 import TopBar from '../../components/Layout/TopBar';
 import { PageLoader } from '../../components/UI/LoadingSpinner';
 import { formatCurrency, formatDate, getCurrencySymbol } from '../../utils/formatters';
 
-const TABS = ['Balances', 'Ledger', 'Sales', 'Payments', 'Exchanges'];
+const TABS = ['Ledger', 'Balances', 'Sales', 'Payments', 'Exchanges'];
 
 export default function PartyDetail() {
   const { id } = useParams();
-  const [tab, setTab] = useState('Balances');
+  // Default to 'Ledger' so opening a party via the eye icon immediately shows
+  // every recorded entry for that party with its date.
+  const [tab, setTab] = useState('Ledger');
 
   const { data: partyData, isLoading: partyLoading } = useQuery({
     queryKey: ['party', id],
     queryFn: () => getParty(id),
   });
 
-  const { data: ledgerData } = useQuery({
+  const { data: ledgerData, isLoading: ledgerLoading } = useQuery({
     queryKey: ['party-ledger', id],
     queryFn: () => getPartyLedger(id),
-    enabled: tab === 'Ledger',
+    enabled: !!id,
   });
 
-  const { data: salesData } = useQuery({
+  const { data: salesData, isLoading: salesLoading } = useQuery({
     queryKey: ['party-sales', id],
-    queryFn: () => getSales({ party: id, limit: 100 }),
-    enabled: tab === 'Sales',
+    queryFn: () => getSales({ party: id, limit: 500 }),
+    enabled: !!id,
   });
 
-  const { data: paymentsData } = useQuery({
+  const { data: paymentsData, isLoading: paymentsLoading } = useQuery({
     queryKey: ['party-payments', id],
-    queryFn: () => getPayments({ party: id, limit: 100 }),
-    enabled: tab === 'Payments',
+    queryFn: () => getPayments({ party: id, limit: 500 }),
+    enabled: !!id,
   });
 
-  const { data: exchangesData } = useQuery({
-    queryKey: ['party-exchanges', id],
-    queryFn: () => getExchanges({ party: id, limit: 100 }),
-    enabled: tab === 'Exchanges',
+  const partyName = partyData?.data?.data?.party?.name;
+
+  const { data: exchangesData, isLoading: exchangesLoading } = useQuery({
+    queryKey: ['party-exchanges', id, partyName || ''],
+    queryFn: async () => {
+      const res = await getExchanges({ party: id, exchangePartyName: partyName, limit: 500 });
+      const exList = res.data?.data?.exchanges || res.data?.exchanges || [];
+      // Fetch INR installments for each exchange in parallel
+      const paymentResults = await Promise.all(
+        exList.map(ex => getExchangeINRPayments(ex._id).catch(() => ({ data: { data: [] } })))
+      );
+      // Embed inrPayments array into each exchange object
+      const enriched = exList.map((ex, i) => ({
+        ...ex,
+        inrPayments: paymentResults[i]?.data?.data || [],
+      }));
+      return { ...res, data: { ...res.data, data: { ...(res.data?.data || {}), exchanges: enriched } } };
+    },
+    enabled: !!id && !!partyName,
   });
 
   if (partyLoading) return <PageLoader />;
@@ -54,7 +71,7 @@ export default function PartyDetail() {
 
   return (
     <div>
-      <TopBar title={party.name} subtitle={`${party.country} • ${party.preferredCurrency}`} />
+      <TopBar title={party.name} subtitle={`${party.country} Ã¢â‚¬Â¢ ${party.preferredCurrency}`} />
 
       <div className="p-6 space-y-6">
         {/* Back */}
@@ -147,7 +164,7 @@ export default function PartyDetail() {
           {/* Ledger Tab */}
           {tab === 'Ledger' && (
             <div className="overflow-x-auto">
-              {!ledgerData ? <PageLoader /> : (
+              {ledgerLoading ? <PageLoader /> : (
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-gray-100">
@@ -162,33 +179,40 @@ export default function PartyDetail() {
                     </tr>
                   </thead>
                   <tbody>
-                    {(ledgerData?.data?.data?.ledger || ledgerData?.data?.ledger || []).map((entry, i) => (
-                      <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
-                        <td className="py-2 px-3 text-gray-600">{formatDate(entry.date)}</td>
-                        <td className="py-2 px-3">
-                          <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
-                            entry.type === 'sale' ? 'bg-blue-50 text-blue-600' :
-                            entry.type === 'payment' ? 'bg-green-50 text-green-600' :
-                            entry.type === 'exchange' ? 'bg-purple-50 text-purple-600' :
-                            'bg-gray-50 text-gray-500'
-                          }`}>
-                            {entry.type}
-                          </span>
-                        </td>
-                        <td className="py-2 px-3 text-gray-700 max-w-xs truncate">{entry.description}</td>
-                        <td className="py-2 px-3 text-right text-slate-800 font-medium">
-                          {entry.debit > 0 ? formatCurrency(entry.debit, entry.currency) : '-'}
-                        </td>
-                        <td className="py-2 px-3 text-right text-green-600 font-medium">
-                          {entry.credit > 0 ? formatCurrency(entry.credit, entry.currency) : '-'}
-                        </td>
-                        <td className="py-2 px-3 text-gray-500">{entry.currency}</td>
-                        <td className={`py-2 px-3 text-right font-semibold ${entry.balance > 0 ? 'text-amber-600' : 'text-green-600'}`}>
-                          {formatCurrency(Math.abs(entry.balance), entry.currency)}
-                        </td>
-                        <td className="py-2 px-3 text-gray-400 text-xs">{entry.reference}</td>
-                      </tr>
-                    ))}
+                    {(() => {
+                      const ledgerEntries = ledgerData?.data?.data?.ledger || ledgerData?.data?.ledger || [];
+                      if (ledgerEntries.length === 0) return (
+                        <tr><td colSpan={8} className="py-8 text-center text-gray-400 text-sm">No ledger entries found for this party.</td></tr>
+                      );
+                      return ledgerEntries.map((entry, i) => (
+                        <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
+                          <td className="py-2 px-3 text-gray-600">{formatDate(entry.date)}</td>
+                          <td className="py-2 px-3">
+                            <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
+                              entry.type === 'sale' ? 'bg-blue-50 text-blue-600' :
+                              entry.type === 'payment' ? 'bg-green-50 text-green-600' :
+                              entry.type === 'exchange' ? 'bg-purple-50 text-purple-600' :
+                              entry.type === 'exchange_installment' ? 'bg-orange-50 text-orange-600' :
+                              'bg-gray-50 text-gray-500'
+                            }`}>
+                              {entry.type}
+                            </span>
+                          </td>
+                          <td className="py-2 px-3 text-gray-700 max-w-xs truncate">{entry.description}</td>
+                          <td className="py-2 px-3 text-right text-slate-800 font-medium">
+                            {entry.debit > 0 ? formatCurrency(entry.debit, entry.currency) : '-'}
+                          </td>
+                          <td className="py-2 px-3 text-right text-green-600 font-medium">
+                            {entry.credit > 0 ? formatCurrency(entry.credit, entry.currency) : '-'}
+                          </td>
+                          <td className="py-2 px-3 text-gray-500">{entry.currency}</td>
+                          <td className={`py-2 px-3 text-right font-semibold ${entry.balance > 0 ? 'text-amber-600' : 'text-green-600'}`}>
+                            {formatCurrency(Math.abs(entry.balance), entry.currency)}
+                          </td>
+                          <td className="py-2 px-3 text-gray-400 text-xs">{entry.reference}</td>
+                        </tr>
+                      ));
+                    })()}
                   </tbody>
                 </table>
               )}
@@ -198,10 +222,17 @@ export default function PartyDetail() {
           {/* Sales Tab */}
           {tab === 'Sales' && (
             <div className="overflow-x-auto">
-              {!salesData ? <PageLoader /> : (
+              {salesLoading ? <PageLoader /> : (
                 (() => {
                   const salesList = salesData?.data?.data?.sales || salesData?.data?.sales || [];
                   if (salesList.length === 0) return <p className="text-sm text-gray-400 text-center py-8">No sales recorded for this party.</p>;
+                  const totalINR = salesList.filter(s => s.status !== 'cancelled').reduce((sum, s) => sum + (s.saleAmountINR || 0), 0);
+                  // Group foreign totals by currency
+                  const foreignTotals = salesList.filter(s => s.status !== 'cancelled' && s.saleAmountForeign > 0).reduce((acc, s) => {
+                    const curr = s.foreignCurrency || 'USD';
+                    acc[curr] = (acc[curr] || 0) + (s.saleAmountForeign || 0);
+                    return acc;
+                  }, {});
                   return (
                 <table className="w-full text-sm">
                   <thead>
@@ -237,6 +268,19 @@ export default function PartyDetail() {
                       </tr>
                     ))}
                   </tbody>
+                  <tfoot>
+                    <tr className="border-t-2 border-gray-200 bg-gray-50">
+                      <td colSpan={3} className="py-2 px-3 font-bold text-gray-700">Total ({salesList.length} entries)</td>
+                      <td className="py-2 px-3 text-right font-bold text-slate-800">{formatCurrency(totalINR, 'INR')}</td>
+                      <td className="py-2 px-3 text-right font-bold text-slate-800">
+                        {Object.entries(foreignTotals).map(([curr, amt]) => (
+                          <div key={curr}>{formatCurrency(amt, curr)}</div>
+                        ))}
+                        {Object.keys(foreignTotals).length === 0 && '-'}
+                      </td>
+                      <td></td>
+                    </tr>
+                  </tfoot>
                 </table>
                   );
                 })()
@@ -247,10 +291,16 @@ export default function PartyDetail() {
           {/* Payments Tab */}
           {tab === 'Payments' && (
             <div className="overflow-x-auto">
-              {!paymentsData ? <PageLoader /> : (
+              {paymentsLoading ? <PageLoader /> : (
                 (() => {
                   const paymentsList = paymentsData?.data?.data?.payments || paymentsData?.data?.payments || [];
                   if (paymentsList.length === 0) return <p className="text-sm text-gray-400 text-center py-8">No payments recorded for this party.</p>;
+                  // Group totals by currency (exclude reversed)
+                  const paymentTotals = paymentsList.filter(p => !p.isReversed).reduce((acc, p) => {
+                    const curr = p.currency || 'INR';
+                    acc[curr] = (acc[curr] || 0) + (p.amountReceived || 0);
+                    return acc;
+                  }, {});
                   return (
                 <table className="w-full text-sm">
                   <thead>
@@ -283,6 +333,17 @@ export default function PartyDetail() {
                       </tr>
                     ))}
                   </tbody>
+                  <tfoot>
+                    <tr className="border-t-2 border-gray-200 bg-gray-50">
+                      <td className="py-2 px-3 font-bold text-gray-700">Total ({paymentsList.filter(p => !p.isReversed).length} payments)</td>
+                      <td className="py-2 px-3 text-right font-bold text-green-700">
+                        {Object.entries(paymentTotals).map(([curr, amt]) => (
+                          <div key={curr}>{formatCurrency(amt, curr)}</div>
+                        ))}
+                      </td>
+                      <td colSpan={4}></td>
+                    </tr>
+                  </tfoot>
                 </table>
                   );
                 })()
@@ -293,12 +354,21 @@ export default function PartyDetail() {
           {/* Exchanges Tab */}
           {tab === 'Exchanges' && (
             <div className="overflow-x-auto">
-              {!exchangesData ? <PageLoader /> : (
+              {exchangesLoading ? <PageLoader /> : (
                 (() => {
                   const exchanges = exchangesData?.data?.data?.exchanges || exchangesData?.data?.exchanges || [];
                   if (exchanges.length === 0) return (
                     <p className="text-sm text-gray-400 text-center py-6">No exchange records found for this party.</p>
                   );
+                  // Group foreign amount totals by currency
+                  const exForeignTotals = exchanges.reduce((acc, ex) => {
+                    const curr = ex.foreignCurrency || 'USD';
+                    acc[curr] = (acc[curr] || 0) + (ex.foreignAmountExchanged || 0);
+                    return acc;
+                  }, {});
+                  const totalNetINR = exchanges.reduce((sum, ex) => sum + (ex.netINRReceived || 0), 0);
+                  const totalReceivedINR = exchanges.reduce((sum, ex) => sum + (ex.inrReceivedAmount || 0), 0);
+                  const totalPendingINR = exchanges.reduce((sum, ex) => sum + (ex.inrPendingAmount || 0), 0);
                   return (
                     <table className="w-full text-sm">
                       <thead>
@@ -315,27 +385,105 @@ export default function PartyDetail() {
                       </thead>
                       <tbody>
                         {exchanges.map((ex) => {
+                          // Calculate the INITIAL received amount = total received - sum of installments
+                          // This ensures the main row shows what was received on the exchange date itself,
+                          // not the cumulative total (which includes later installment payments).
+                          const installmentsTotal = (ex.inrPayments || []).reduce(
+                            (sum, ip) => sum + (parseFloat(ip.amountINR) || 0), 0
+                          );
+                          const initialReceived = Math.max(0, (ex.inrReceivedAmount || 0) - installmentsTotal);
+                          const initialPending = Math.max(0, (ex.netINRReceived || 0) - initialReceived);
+                          const hasInstallments = (ex.inrPayments || []).length > 0;
+                          // isPending = still some INR outstanding considering installments too
                           const isPending = (ex.inrPendingAmount || 0) > 0.01;
+                          // Show "initial pending" on main row only if there are installments, so user
+                          // understands the exchange was not fully paid on the exchange date.
+                          const showInitialPending = hasInstallments && initialPending > 0.01;
                           return (
-                            <tr key={ex._id} className="border-b border-gray-50 hover:bg-gray-50">
-                              <td className="py-2 px-3 text-gray-600">{formatDate(ex.exchangeDate)}</td>
-                              <td className="py-2 px-3">
-                                <span className="text-xs font-medium bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded">{ex.foreignCurrency}</span>
-                              </td>
-                              <td className="py-2 px-3 text-right font-semibold">{formatCurrency(ex.foreignAmountExchanged, ex.foreignCurrency)}</td>
-                              <td className="py-2 px-3 text-right text-gray-600">&#8377;{parseFloat(ex.exchangeRate || 0).toFixed(2)}</td>
-                              <td className="py-2 px-3 text-right font-bold text-slate-800">{formatCurrency(ex.netINRReceived, 'INR')}</td>
-                              <td className="py-2 px-3 text-right text-green-600 font-medium">{formatCurrency(ex.inrReceivedAmount || 0, 'INR')}</td>
-                              <td className={`py-2 px-3 text-right font-medium ${isPending ? 'text-amber-600' : 'text-green-600'}`}>{formatCurrency(ex.inrPendingAmount || 0, 'INR')}</td>
-                              <td className="py-2 px-3">
-                                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${isPending ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
-                                  {isPending ? `${ex.paymentReceivedPercent || 0}% received` : 'Fully Received'}
-                                </span>
-                              </td>
-                            </tr>
+                            <React.Fragment key={ex._id}>
+                              <tr className="border-b border-gray-50 hover:bg-gray-50">
+                                <td className="py-2 px-3 text-gray-600">{formatDate(ex.exchangeDate)}</td>
+                                <td className="py-2 px-3">
+                                  <span className="text-xs font-medium bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded">{ex.foreignCurrency}</span>
+                                </td>
+                                <td className="py-2 px-3 text-right font-semibold">{formatCurrency(ex.foreignAmountExchanged, ex.foreignCurrency)}</td>
+                                <td className="py-2 px-3 text-right text-gray-600">&#8377;{parseFloat(ex.exchangeRate || 0).toFixed(2)}</td>
+                                <td className="py-2 px-3 text-right font-bold text-slate-800">{formatCurrency(ex.netINRReceived, 'INR')}</td>
+                                {/* Show initial received (on exchange date) rather than cumulative total */}
+                                <td className="py-2 px-3 text-right text-green-600 font-medium">
+                                  {formatCurrency(hasInstallments ? initialReceived : (ex.inrReceivedAmount || 0), 'INR')}
+                                </td>
+                                <td className={`py-2 px-3 text-right font-medium ${(showInitialPending || isPending) ? 'text-amber-600' : 'text-green-600'}`}>
+                                  {formatCurrency(hasInstallments ? initialPending : (ex.inrPendingAmount || 0), 'INR')}
+                                </td>
+                                <td className="py-2 px-3">
+                                  {hasInstallments ? (
+                                    // If there are installments, show partial status on main row
+                                    // (even if now fully received — the exchange date row was partial)
+                                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${initialPending > 0.01 ? 'bg-amber-100 text-amber-700' : 'bg-blue-50 text-blue-600'}`}>
+                                      {initialPending > 0.01 ? 'Partial' : 'Via Installments'}
+                                    </span>
+                                  ) : (
+                                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${isPending ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
+                                      {isPending ? `${ex.paymentReceivedPercent || 0}% received` : 'Fully Received'}
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                              {/* INR Installment sub-rows — each shows its own date and amount */}
+                              {(ex.inrPayments || []).map((ip, ipIdx) => {
+                                // For each installment, calculate running balance after this payment
+                                const paidSoFarBefore = (ex.inrPayments || [])
+                                  .slice(0, ipIdx)
+                                  .reduce((s, p) => s + (parseFloat(p.amountINR) || 0), 0);
+                                const paidAfterThis = paidSoFarBefore + (parseFloat(ip.amountINR) || 0) + initialReceived;
+                                const stillDue = Math.max(0, (ex.netINRReceived || 0) - paidAfterThis);
+                                return (
+                                  <tr key={ip._id} className="bg-amber-50/40 border-b border-amber-50">
+                                    <td className="py-1.5 px-3 pl-6 text-orange-700 text-xs">
+                                      <span className="text-[9px] mr-1 text-orange-400">&#8627;</span>
+                                      {ip.paymentDate ? new Date(ip.paymentDate).toLocaleDateString('en-IN') : '-'}
+                                    </td>
+                                    <td className="py-1.5 px-3 text-xs">
+                                      <span className="text-[10px] font-medium bg-orange-50 text-orange-600 px-1.5 py-0.5 rounded">INR Installment</span>
+                                    </td>
+                                    <td className="py-1.5 px-3 text-right text-xs text-gray-500" colSpan={2}>{ip.notes || '-'}</td>
+                                    {/* Received in this installment */}
+                                    <td className="py-1.5 px-3 text-right text-xs font-bold text-green-700">
+                                      +{formatCurrency(ip.amountINR, 'INR')}
+                                    </td>
+                                    {/* Still due after this installment */}
+                                    <td className={`py-1.5 px-3 text-right text-xs font-semibold ${stillDue > 0.01 ? 'text-amber-600' : 'text-green-600'}`}>
+                                      {stillDue > 0.01 ? formatCurrency(stillDue, 'INR') + ' due' : '✓ Settled'}
+                                    </td>
+                                    <td className="py-1.5 px-3 text-center">
+                                      {stillDue <= 0.01 && (
+                                        <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-medium">Fully Received</span>
+                                      )}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </React.Fragment>
                           );
                         })}
                       </tbody>
+                      <tfoot>
+                        <tr className="border-t-2 border-gray-200 bg-gray-50">
+                          <td className="py-2 px-3 font-bold text-gray-700">Total ({exchanges.length} entries)</td>
+                          <td></td>
+                          <td className="py-2 px-3 text-right font-bold text-slate-800">
+                            {Object.entries(exForeignTotals).map(([curr, amt]) => (
+                              <div key={curr}>{formatCurrency(amt, curr)}</div>
+                            ))}
+                          </td>
+                          <td></td>
+                          <td className="py-2 px-3 text-right font-bold text-slate-800">{formatCurrency(totalNetINR, 'INR')}</td>
+                          <td className="py-2 px-3 text-right font-bold text-green-700">{formatCurrency(totalReceivedINR, 'INR')}</td>
+                          <td className={`py-2 px-3 text-right font-bold ${totalPendingINR > 0.01 ? 'text-amber-600' : 'text-green-600'}`}>{formatCurrency(totalPendingINR, 'INR')}</td>
+                          <td></td>
+                        </tr>
+                      </tfoot>
                     </table>
                   );
                 })()

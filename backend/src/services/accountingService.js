@@ -4,6 +4,7 @@ const Payment = require('../models/Payment');
 const PaymentAllocation = require('../models/PaymentAllocation');
 const CurrencyExchange = require('../models/CurrencyExchange');
 const OpeningBalance = require('../models/OpeningBalance');
+const WalletAdjustment = require('../models/WalletAdjustment');
 const Party = require('../models/Party');
 const decimal = require('../utils/decimal');
 
@@ -151,34 +152,7 @@ async function recalculateSaleStatus(saleId, session = null) {
  * @param {string|ObjectId} partyId
  * @returns {Promise<Array>}
  */
-async function getPartyBalances(userId, partyId) {
-  const partyObjectId = new mongoose.Types.ObjectId(partyId);
-  const userObjectId = new mongoose.Types.ObjectId(userId);
-
-  // 1. Fetch all active/partial/settled sales
-  const sales = await Sale.find({
-    user: userObjectId,
-    party: partyObjectId,
-    status: { $ne: 'cancelled' }
-  });
-
-  // 2. Fetch all non-reversed payments
-  const payments = await Payment.find({
-    user: userObjectId,
-    party: partyObjectId,
-    isReversed: false
-  });
-
-  // 3. Fetch all non-reversed allocations for this party's sales or payments
-  const paymentIds = payments.map(p => p._id);
-  const saleIds = sales.map(s => s._id);
-
-  const allocations = await PaymentAllocation.find({
-    user: userObjectId,
-    $or: [{ payment: { $in: paymentIds } }, { sale: { $in: saleIds } }],
-    isReversed: false
-  });
-
+async function computePartyBalances(sales, payments, allocations) {
   // Identify all currencies involved
   const currencySet = new Set(['INR']);
   sales.forEach(s => {
@@ -203,7 +177,6 @@ async function getPartyBalances(userId, partyId) {
     }
   }
 
-  // Calculate totalSales, totalAllocated, and outstanding per currency
   const resultByCurrency = {};
   for (const curr of currencySet) {
     resultByCurrency[curr] = {
@@ -245,15 +218,109 @@ async function getPartyBalances(userId, partyId) {
     }
   }
 
-  // Finalize totals and calculate outstanding
-  const balances = Object.values(resultByCurrency).map(item => {
+  return Object.values(resultByCurrency).map(item => {
     item.totalSales = decimal.round2(item.totalSales);
     item.totalAllocated = decimal.round2(item.totalAllocated);
     item.outstanding = Math.max(0, decimal.round2(decimal.subtract(item.totalSales, item.totalAllocated)));
     return item;
   });
+}
+async function getPartyBalances(userId, partyId) {
+  const partyObjectId = new mongoose.Types.ObjectId(partyId);
+  const userObjectId = new mongoose.Types.ObjectId(userId);
 
-  return balances;
+  const sales = await Sale.find({
+    user: userObjectId,
+    party: partyObjectId,
+    status: { $ne: 'cancelled' }
+  });
+
+  const payments = await Payment.find({
+    user: userObjectId,
+    party: partyObjectId,
+    isReversed: false
+  });
+
+  const paymentIds = payments.map(p => p._id);
+  const saleIds = sales.map(s => s._id);
+
+  const allocations = (paymentIds.length || saleIds.length)
+    ? await PaymentAllocation.find({
+        user: userObjectId,
+        $or: [{ payment: { $in: paymentIds } }, { sale: { $in: saleIds } }],
+        isReversed: false
+      })
+    : [];
+
+  return computePartyBalances(sales, payments, allocations);
+}
+
+/**
+ * Compute balances for many parties at once using batched queries.
+ * Avoids the N+1 query pattern (one set of DB calls total instead of per party).
+ * @returns {Promise<Object<string, Array>>} map of partyId -> balances array
+ */
+async function getAllPartyBalances(userId, partyIds) {
+  const userObjectId = new mongoose.Types.ObjectId(userId);
+  const partyObjectIds = partyIds.map(id => (typeof id === 'string' ? new mongoose.Types.ObjectId(id) : id));
+  if (partyObjectIds.length === 0) return {};
+
+  const sales = await Sale.find({
+    user: userObjectId,
+    party: { $in: partyObjectIds },
+    status: { $ne: 'cancelled' }
+  });
+  const payments = await Payment.find({
+    user: userObjectId,
+    party: { $in: partyObjectIds },
+    isReversed: false
+  });
+
+  const paymentIds = payments.map(p => p._id);
+  const saleIds = sales.map(s => s._id);
+  const allocations = (paymentIds.length || saleIds.length)
+    ? await PaymentAllocation.find({
+        user: userObjectId,
+        $or: [{ payment: { $in: paymentIds } }, { sale: { $in: saleIds } }],
+        isReversed: false
+      })
+    : [];
+
+  const key = (id) => String(id);
+  const salesByParty = {};
+  const paymentsByParty = {};
+  const allocationsByParty = {};
+  partyObjectIds.forEach(pid => {
+    const k = key(pid);
+    salesByParty[k] = [];
+    paymentsByParty[k] = [];
+    allocationsByParty[k] = [];
+  });
+
+  sales.forEach(s => { if (salesByParty[key(s.party)]) salesByParty[key(s.party)].push(s); });
+  payments.forEach(p => { if (paymentsByParty[key(p.party)]) paymentsByParty[key(p.party)].push(p); });
+
+  // Map each allocation to its party via its sale (allocations always have a sale)
+  const saleToParty = {};
+  sales.forEach(s => { saleToParty[key(s._id)] = key(s.party); });
+  allocations.forEach(a => {
+    if (a.sale) {
+      const pk = saleToParty[key(a.sale)];
+      if (pk && allocationsByParty[pk]) allocationsByParty[pk].push(a);
+    }
+  });
+
+  // Run computePartyBalances for all parties in PARALLEL and await all results
+  const partyIdKeys = partyObjectIds.map(pid => key(pid));
+  const balancesResults = await Promise.all(
+    partyIdKeys.map(k => computePartyBalances(salesByParty[k] || [], paymentsByParty[k] || [], allocationsByParty[k] || []))
+  );
+
+  const result = {};
+  partyIdKeys.forEach((k, i) => {
+    result[k] = balancesResults[i];
+  });
+  return result;
 }
 
 /**
@@ -308,83 +375,74 @@ async function computeAutoPaymentAllocation(userId, partyId, amount, paymentCurr
  */
 async function getCurrencyHoldings(userId, currency = null) {
   const userObjectId = new mongoose.Types.ObjectId(userId);
-  const foreignCurrencies = currency ? [currency] : ['USD', 'AUD', 'EUR', 'GBP', 'CAD', 'SGD', 'AED', 'OTHER'];
+  const foreignCurrencies = currency ? [String(currency).toUpperCase()] : ['USD', 'AUD', 'EUR', 'GBP', 'CAD', 'SGD', 'AED', 'OTHER'];
 
-  const results = [];
-
-  for (const curr of foreignCurrencies) {
-    // 1. Total payments received in this currency
-    const paymentAgg = await Payment.aggregate([
-      {
-        $match: {
-          user: userObjectId,
-          currency: curr,
-          isReversed: false
-        }
-      },
+  // All 4 aggregations run in PARALLEL for maximum speed
+  const [adjustmentAgg, paymentAgg, openingAgg, exchangeAgg] = await Promise.all([
+    // Manual wallet adjustments per currency
+    WalletAdjustment.aggregate([
+      { $match: { user: userObjectId } },
+      { $group: { _id: '$currency', total: { $sum: '$amount' } } }
+    ]),
+    // Total payments received per currency
+    Payment.aggregate([
+      { $match: { user: userObjectId, isReversed: false } },
+      { $group: { _id: '$currency', total: { $sum: '$amountReceived' } } }
+    ]),
+    // Opening cash_held balances per currency
+    OpeningBalance.aggregate([
+      { $match: { user: userObjectId, balanceType: 'cash_held' } },
+      { $group: { _id: '$currency', total: { $sum: '$amount' } } }
+    ]),
+    // Currency exchanges out of each source currency
+    CurrencyExchange.aggregate([
+      { $match: { user: userObjectId, isReversed: false } },
       {
         $group: {
-          _id: null,
-          total: { $sum: '$amountReceived' }
-        }
-      }
-    ]);
-    const totalPaymentsReceived = paymentAgg.length > 0 ? paymentAgg[0].total : 0;
-
-    // 2. Opening cash_held balances in this currency
-    const openingAgg = await OpeningBalance.aggregate([
-      {
-        $match: {
-          user: userObjectId,
-          currency: curr,
-          balanceType: 'cash_held'
-        }
-      },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: '$amount' }
-        }
-      }
-    ]);
-    const openingCashHeld = openingAgg.length > 0 ? openingAgg[0].total : 0;
-
-    // 3. Currency exchanges out of this currency
-    const exchangeAgg = await CurrencyExchange.aggregate([
-      {
-        $match: {
-          user: userObjectId,
-          foreignCurrency: curr,
-          isReversed: false
-        }
-      },
-      {
-        $group: {
-          _id: null,
+          _id: '$foreignCurrency',
           totalExchanged: { $sum: '$foreignAmountExchanged' },
           totalGrossINR: { $sum: '$grossINRAmount' },
           totalNetINR: { $sum: '$netINRReceived' }
         }
       }
-    ]);
-    const totalExchanged = exchangeAgg.length > 0 ? exchangeAgg[0].totalExchanged : 0;
-    const grossINRFromExchanges = exchangeAgg.length > 0 ? exchangeAgg[0].totalGrossINR : 0;
-    const netINRFromExchanges = exchangeAgg.length > 0 ? exchangeAgg[0].totalNetINR : 0;
+    ]),
+  ]);
 
-    const totalReceived = decimal.add(totalPaymentsReceived, openingCashHeld);
+  const adjustments = {};
+  adjustmentAgg.forEach(g => { adjustments[g._id] = g.total; });
+
+  const paymentsReceived = {};
+  paymentAgg.forEach(g => { paymentsReceived[g._id] = g.total; });
+
+  const openingCash = {};
+  openingAgg.forEach(g => { openingCash[g._id] = g.total; });
+
+  const exchangeTotals = {};
+  exchangeAgg.forEach(g => { exchangeTotals[g._id] = g; });
+
+  const results = foreignCurrencies.map((curr) => {
+    const ex = exchangeTotals[curr] || {};
+    const totalPaymentsReceived = paymentsReceived[curr] || 0;
+    const openingCashHeld = openingCash[curr] || 0;
+    const adjustment = adjustments[curr] || 0;
+    const totalReceived = decimal.add(decimal.add(totalPaymentsReceived, openingCashHeld), adjustment);
+    const totalExchanged = ex.totalExchanged || 0;
+    const grossINRFromExchanges = ex.totalGrossINR || 0;
+    const netINRFromExchanges = ex.totalNetINR || 0;
     const currentHolding = decimal.round2(Math.max(0, decimal.subtract(totalReceived, totalExchanged)));
 
-    results.push({
+    return {
       currency: curr,
       totalPaymentsReceived: decimal.round2(totalPaymentsReceived),
       openingCashHeld: decimal.round2(openingCashHeld),
+      manualAdjustment: decimal.round2(adjustment),
       totalReceived: decimal.round2(totalReceived),
       totalExchanged: decimal.round2(totalExchanged),
       grossINRFromExchanges: decimal.round2(grossINRFromExchanges),
       netINRFromExchanges: decimal.round2(netINRFromExchanges),
       currentHolding
-    });
-  }
+    };
+  });
 
   return currency ? results[0] : results;
 }
@@ -393,52 +451,65 @@ async function getCurrencyHoldings(userId, currency = null) {
  * Get the full currency wallet for a user.
  * Any payment received from any party in any currency (including INR) is added
  * to the wallet and is available for currency exchange.
+ * Uses Promise.all to run all aggregations in PARALLEL for much faster loading.
  * @param {string|ObjectId} userId
  * @returns {Promise<Array>}
  */
 async function getWalletBalances(userId) {
-  const holdings = await getCurrencyHoldings(userId);
   const userObjectId = new mongoose.Types.ObjectId(userId);
 
-  // INR is part of the wallet too (received INR payments + opening cash held +
-  // INR received from currency exchanges). INR is never exchanged out, so totalExchanged stays 0.
-  const inrPaymentAgg = await Payment.aggregate([
-    { $match: { user: userObjectId, currency: 'INR', isReversed: false } },
-    { $group: { _id: null, total: { $sum: '$amountReceived' } } }
-  ]);
-  const inrPaymentsReceived = inrPaymentAgg.length > 0 ? inrPaymentAgg[0].total : 0;
-
-  const inrOpeningAgg = await OpeningBalance.aggregate([
-    { $match: { user: userObjectId, currency: 'INR', balanceType: 'cash_held' } },
-    { $group: { _id: null, total: { $sum: '$amount' } } }
-  ]);
-  const inrOpeningCashHeld = inrOpeningAgg.length > 0 ? inrOpeningAgg[0].total : 0;
-
-  const inrFromExchangesAgg = await CurrencyExchange.aggregate([
-    { $match: { user: userObjectId, isReversed: false } },
-    {
-      $group: {
-        _id: null,
-        received: { $sum: '$inrReceivedAmount' },
-        pending: { $sum: '$inrPendingAmount' },
-        gross: { $sum: '$netINRReceived' }
+  // Run getCurrencyHoldings and all INR aggregations in PARALLEL (not sequential)
+  const [
+    holdings,
+    inrPaymentAgg,
+    inrOpeningAgg,
+    inrFromExchangesAgg,
+    inrAdjustmentAgg,
+  ] = await Promise.all([
+    getCurrencyHoldings(userId),
+    Payment.aggregate([
+      { $match: { user: userObjectId, currency: 'INR', isReversed: false } },
+      { $group: { _id: null, total: { $sum: '$amountReceived' } } }
+    ]),
+    OpeningBalance.aggregate([
+      { $match: { user: userObjectId, currency: 'INR', balanceType: 'cash_held' } },
+      { $group: { _id: null, total: { $sum: '$amount' } } }
+    ]),
+    CurrencyExchange.aggregate([
+      { $match: { user: userObjectId, isReversed: false } },
+      {
+        $group: {
+          _id: null,
+          received: { $sum: '$inrReceivedAmount' },
+          pending: { $sum: '$inrPendingAmount' },
+          gross: { $sum: '$netINRReceived' }
+        }
       }
-    }
+    ]),
+    WalletAdjustment.aggregate([
+      { $match: { user: userObjectId, currency: 'INR' } },
+      { $group: { _id: null, total: { $sum: '$amount' } } }
+    ]),
   ]);
+
+  const inrPaymentsReceived = inrPaymentAgg.length > 0 ? inrPaymentAgg[0].total : 0;
+  const inrOpeningCashHeld = inrOpeningAgg.length > 0 ? inrOpeningAgg[0].total : 0;
   // Only the INR actually received from the exchange party counts towards the INR wallet.
   // Pending/due amounts (e.g. party paid only 50%) are tracked separately.
   const inrReceivedFromExchanges = inrFromExchangesAgg.length > 0 ? inrFromExchangesAgg[0].received : 0;
   const inrPendingFromExchanges = inrFromExchangesAgg.length > 0 ? inrFromExchangesAgg[0].pending : 0;
+  const inrAdjustment = inrAdjustmentAgg.length > 0 ? inrAdjustmentAgg[0].total : 0;
 
   const inrTotalReceived = decimal.add(
-    decimal.add(inrPaymentsReceived, inrOpeningCashHeld),
-    inrReceivedFromExchanges
+    decimal.add(decimal.add(inrPaymentsReceived, inrOpeningCashHeld), inrReceivedFromExchanges),
+    inrAdjustment
   );
 
   holdings.push({
     currency: 'INR',
     totalPaymentsReceived: decimal.round2(inrPaymentsReceived),
     openingCashHeld: decimal.round2(inrOpeningCashHeld),
+    manualAdjustment: decimal.round2(inrAdjustment),
     totalReceived: decimal.round2(inrTotalReceived),
     totalExchanged: 0,
     grossINRFromExchanges: decimal.round2(inrReceivedFromExchanges),
@@ -470,26 +541,66 @@ async function getDashboardSummary(userId, filters = {}) {
     matchFilter.party = new mongoose.Types.ObjectId(filters.party);
   }
 
-  // 1. Sales Aggregation
-  const salesAgg = await Sale.aggregate([
-    { $match: { ...matchFilter, status: { $ne: 'cancelled' } } },
-    {
-      $group: {
-        _id: '$foreignCurrency',
-        count: { $sum: 1 },
-        totalINR: { $sum: '$saleAmountINR' },
-        totalForeign: { $sum: '$saleAmountForeign' },
-        totalProfitINR: { $sum: '$estimatedProfitINR' },
-        totalProfitForeign: { $sum: '$estimatedProfitForeign' }
+  // Build payment filter (may differ from matchFilter if date range applies to paymentDate)
+  const paymentFilter = { user: userObjectId, isReversed: false };
+  if (filters.startDate || filters.endDate) {
+    paymentFilter.paymentDate = {};
+    if (filters.startDate) paymentFilter.paymentDate.$gte = new Date(filters.startDate);
+    if (filters.endDate) paymentFilter.paymentDate.$lte = new Date(filters.endDate);
+  }
+  if (filters.party) {
+    paymentFilter.party = new mongoose.Types.ObjectId(filters.party);
+  }
+
+  // Run all top-level DB queries in PARALLEL for maximum speed
+  const [salesAgg, paymentAgg, parties, currencyHoldings, exchangeAgg] = await Promise.all([
+    // 1. Sales aggregation
+    Sale.aggregate([
+      { $match: { ...matchFilter, status: { $ne: 'cancelled' } } },
+      {
+        $group: {
+          _id: '$foreignCurrency',
+          count: { $sum: 1 },
+          totalINR: { $sum: '$saleAmountINR' },
+          totalForeign: { $sum: '$saleAmountForeign' },
+          totalProfitINR: { $sum: '$estimatedProfitINR' },
+          totalProfitForeign: { $sum: '$estimatedProfitForeign' }
+        }
       }
-    }
+    ]),
+    // 2. Payments aggregation
+    Payment.aggregate([
+      { $match: paymentFilter },
+      {
+        $group: {
+          _id: '$currency',
+          count: { $sum: 1 },
+          totalReceived: { $sum: '$amountReceived' }
+        }
+      }
+    ]),
+    // 3a. Active parties list
+    Party.find({ user: userObjectId, isActive: true }).select('name country preferredCurrency'),
+    // 4. Currency Holdings
+    getCurrencyHoldings(userId),
+    // 5. Currency Exchanges total
+    CurrencyExchange.aggregate([
+      { $match: { user: userObjectId, isReversed: false } },
+      {
+        $group: {
+          _id: null,
+          totalNetINR: { $sum: '$netINRReceived' },
+          totalGrossINR: { $sum: '$grossINRAmount' },
+          totalFees: { $sum: '$exchangeFee' }
+        }
+      }
+    ]),
   ]);
 
-  // Overall totals in INR
+  // Process sales aggregation results
   let totalSalesINR = 0;
   let totalProfitINR = 0;
   let totalSalesCount = 0;
-  // USD-first totals (sales are primarily recorded in USD)
   let totalSalesUSD = 0;
   let totalProfitUSD = 0;
   const salesByCurrency = {};
@@ -514,36 +625,13 @@ async function getDashboardSummary(userId, filters = {}) {
     };
   });
 
-  // 2. Payments Aggregation
-  const paymentFilter = { user: userObjectId, isReversed: false };
-  if (filters.startDate || filters.endDate) {
-    paymentFilter.paymentDate = {};
-    if (filters.startDate) paymentFilter.paymentDate.$gte = new Date(filters.startDate);
-    if (filters.endDate) paymentFilter.paymentDate.$lte = new Date(filters.endDate);
-  }
-  if (filters.party) {
-    paymentFilter.party = new mongoose.Types.ObjectId(filters.party);
-  }
-
-  const paymentAgg = await Payment.aggregate([
-    { $match: paymentFilter },
-    {
-      $group: {
-        _id: '$currency',
-        count: { $sum: 1 },
-        totalReceived: { $sum: '$amountReceived' }
-      }
-    }
-  ]);
-
+  // Process payments aggregation results
   const paymentsByCurrency = {};
   let paymentsCount = 0;
   let totalReceivedINR = 0;
   let totalReceivedUSD = 0;
   paymentAgg.forEach(group => {
     paymentsCount += group.count;
-    // Only INR receipts count towards the INR total; foreign amounts are
-    // reported per-currency in paymentsByCurrency (cannot be summed as INR).
     if (group._id === 'INR') {
       totalReceivedINR = decimal.add(totalReceivedINR, group.totalReceived);
     } else {
@@ -555,28 +643,25 @@ async function getDashboardSummary(userId, filters = {}) {
     };
   });
 
-  // 3. Outstanding calculation by party
-  const parties = await Party.find({ user: userObjectId, isActive: true }).select('name country preferredCurrency');
-  const partySummaries = [];
+  // 3b. Outstanding calculation (runs after parties list is available, still fast - batched)
+  const partyIds = parties.map(p => p._id);
+  const [balMap, allSales] = await Promise.all([
+    partyIds.length ? getAllPartyBalances(userId, partyIds) : Promise.resolve({}),
+    partyIds.length
+      ? Sale.find({ user: userObjectId, party: { $in: partyIds }, status: { $ne: 'cancelled' } })
+      : Promise.resolve([]),
+  ]);
+  const salesByParty = {};
+  partyIds.forEach(pid => { salesByParty[String(pid)] = []; });
+  allSales.forEach(s => { const k = String(s.party); if (salesByParty[k]) salesByParty[k].push(s); });
 
-  for (const party of parties) {
-    const balances = await getPartyBalances(userId, party._id);
-    const partySales = await Sale.find({ user: userObjectId, party: party._id, status: { $ne: 'cancelled' } });
+  const partySummaries = parties.map((party) => {
+    const k = String(party._id);
+    const balances = balMap[k] || [];
+    const partySales = salesByParty[k] || [];
     const profitINR = partySales.reduce((sum, s) => decimal.add(sum, s.estimatedProfitINR || 0), 0);
-
-    let totalINR = 0;
-    let outstandingINR = 0;
-    balances.forEach(b => {
-      if (b.currency === 'INR') {
-        outstandingINR = decimal.add(outstandingINR, b.outstanding);
-      }
-    });
-
-    partySales.forEach(s => {
-      totalINR = decimal.add(totalINR, s.saleAmountINR);
-    });
-
-    partySummaries.push({
+    const totalINR = partySales.reduce((sum, s) => decimal.add(sum, s.saleAmountINR), 0);
+    return {
       partyId: party._id,
       name: party.name,
       country: party.country,
@@ -584,25 +669,10 @@ async function getDashboardSummary(userId, filters = {}) {
       balances,
       totalSalesINR: decimal.round2(totalINR),
       profitINR: decimal.round2(profitINR)
-    });
-  }
+    };
+  });
 
-  // 4. Currency Holdings
-  const currencyHoldings = await getCurrencyHoldings(userId);
-
-  // 5. Currency Exchanges total
-  const exchangeAgg = await CurrencyExchange.aggregate([
-    { $match: { user: userObjectId, isReversed: false } },
-    {
-      $group: {
-        _id: null,
-        totalNetINR: { $sum: '$netINRReceived' },
-        totalGrossINR: { $sum: '$grossINRAmount' },
-        totalFees: { $sum: '$exchangeFee' }
-      }
-    }
-  ]);
-
+  // Process exchange aggregation results
   const inrFromExchanges = exchangeAgg.length > 0 ? {
     netINR: decimal.round2(exchangeAgg[0].totalNetINR),
     grossINR: decimal.round2(exchangeAgg[0].totalGrossINR),
@@ -669,6 +739,7 @@ module.exports = {
   getSaleOutstanding,
   recalculateSaleStatus,
   getPartyBalances,
+  getAllPartyBalances,
   computeAutoPaymentAllocation,
   getCurrencyHoldings,
   getWalletBalances,

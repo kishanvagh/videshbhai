@@ -19,6 +19,7 @@ const openingBalanceRoutes = require('./src/routes/openingBalanceRoutes');
 const dashboardRoutes = require('./src/routes/dashboardRoutes');
 const reportRoutes = require('./src/routes/reportRoutes');
 const auditRoutes = require('./src/routes/auditRoutes');
+const walletRoutes = require('./src/routes/walletRoutes');
 
 const app = express();
 
@@ -96,6 +97,7 @@ app.use('/api/opening-balances', openingBalanceRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/audit', auditRoutes);
+app.use('/api/wallet', walletRoutes);
 
 // 404 handler
 app.use((req, res) => {

@@ -2,6 +2,7 @@ const Party = require('../models/Party');
 const Sale = require('../models/Sale');
 const Payment = require('../models/Payment');
 const CurrencyExchange = require('../models/CurrencyExchange');
+const ExchangeINRPayment = require('../models/ExchangeINRPayment');
 const OpeningBalance = require('../models/OpeningBalance');
 const AuditLog = require('../models/AuditLog');
 const accountingService = require('../services/accountingService');
@@ -284,6 +285,8 @@ const getPartyLedger = async (req, res, next) => {
       isReversed: false
     });
 
+    const exchangeIds = exchanges.map(ex => ex._id);
+
     exchanges.forEach(ex => {
       entries.push({
         id: ex._id,
@@ -297,6 +300,30 @@ const getPartyLedger = async (req, res, next) => {
         inrAmount: ex.netINRReceived
       });
     });
+
+    // 5. INR Installment Payments for currency exchanges linked to this party
+    if (exchangeIds.length > 0) {
+      const inrPayments = await ExchangeINRPayment.find({
+        user: req.user.id,
+        exchange: { $in: exchangeIds }
+      }).populate('exchange', 'foreignCurrency foreignAmountExchanged exchangePartyName');
+
+      inrPayments.forEach(p => {
+        const ex = p.exchange;
+        const fxLabel = ex ? `${ex.foreignAmountExchanged} ${ex.foreignCurrency}${ex.exchangePartyName ? ' via ' + ex.exchangePartyName : ''}` : '';
+        entries.push({
+          id: p._id,
+          date: p.paymentDate,
+          type: 'exchange_installment',
+          description: `INR Installment received${fxLabel ? ' for exchange of ' + fxLabel : ''}${p.notes ? ' - ' + p.notes : ''}`,
+          debit: 0,
+          credit: decimal.round2(p.amountINR),
+          currency: 'INR',
+          reference: p.referenceNumber || '-',
+          inrAmount: p.amountINR
+        });
+      });
+    }
 
     // Sort chronologically ascending
     entries.sort((a, b) => new Date(a.date) - new Date(b.date));

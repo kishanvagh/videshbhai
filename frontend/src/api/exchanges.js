@@ -9,3 +9,9 @@ export const deleteExchange = (id) => api.delete(`/exchanges/${id}`);
 export const getExchangeINRPayments = (exchangeId) => api.get(`/exchanges/${exchangeId}/inr-payments`);
 export const addExchangeINRPayment = (exchangeId, data) => api.post(`/exchanges/${exchangeId}/inr-payments`, data);
 export const deleteExchangeINRPayment = (exchangeId, paymentId) => api.delete(`/exchanges/${exchangeId}/inr-payments/${paymentId}`);
+
+// Wallet adjustment APIs
+export const getWalletAdjustments = (params) => api.get('/wallet/adjustments', { params });
+export const createWalletAdjustment = (data) => api.post('/wallet/adjustments', data);
+export const updateWalletAdjustment = (id, data) => api.put(`/wallet/adjustments/${id}`, data);
+export const deleteWalletAdjustment = (id) => api.delete(`/wallet/adjustments/${id}`);

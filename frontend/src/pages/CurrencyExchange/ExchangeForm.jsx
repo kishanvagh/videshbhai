@@ -446,7 +446,15 @@ export default function ExchangeForm({ isOpen, onClose, exchange, onSuccess }) {
           <div className="sm:col-span-2">
             <label className="label">Currency Exchange Party (who gives you INR) *</label>
             {(exchangeParties.length > 0 || parties.length > 0) ? (
-              <select className="input text-xs font-semibold" {...register('exchangePartyName')}>
+              <select
+                className="input text-xs font-semibold"
+                {...register('exchangePartyName', {
+                  onChange: (e) => {
+                    const chosen = [...exchangeParties, ...parties].find((p) => p.name === e.target.value);
+                    setValue('party', chosen ? chosen._id : '');
+                  },
+                })}
+              >
                 <option value="">-- Select Exchange Party --</option>
                 {exchangeParties.length > 0 && (
                   <optgroup label="🔁 Exchange Parties">

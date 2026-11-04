@@ -11,7 +11,11 @@ import {
   Receipt,
   Trash2,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  PencilLine,
+  X,
+  Check,
+  Settings2
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import TopBar from '../../components/Layout/TopBar';
@@ -29,6 +33,10 @@ import {
   getExchangeINRPayments,
   addExchangeINRPayment,
   deleteExchangeINRPayment,
+  getWalletAdjustments,
+  createWalletAdjustment,
+  updateWalletAdjustment,
+  deleteWalletAdjustment,
 } from '../../api/exchanges';
 import { getParties } from '../../api/parties';
 import { formatCurrency, formatINR, formatDate, CURRENCIES } from '../../utils/formatters';
@@ -66,6 +74,22 @@ export default function CurrencyExchange() {
   const [newPaymentDate, setNewPaymentDate] = useState(new Date().toISOString().split('T')[0]);
   const [newPaymentNote, setNewPaymentNote] = useState('');
   const [addingPayment, setAddingPayment] = useState(false);
+
+  // ── Wallet Edit state ──────────────────────────────────────────────
+  const [showWalletManager, setShowWalletManager] = useState(false);
+  const [walletAdjustments, setWalletAdjustments] = useState([]);
+  const [walletAdjLoading, setWalletAdjLoading] = useState(false);
+  // form for adding new adjustment
+  const [adjCurrency, setAdjCurrency] = useState('USD');
+  const [adjAmount, setAdjAmount] = useState('');
+  const [adjReason, setAdjReason] = useState('');
+  const [adjDate, setAdjDate] = useState(new Date().toISOString().split('T')[0]);
+  const [adjSaving, setAdjSaving] = useState(false);
+  // inline edit
+  const [editingAdj, setEditingAdj] = useState(null); // { id, amount, reason, adjustmentDate }
+  const [adjToDelete, setAdjToDelete] = useState(null);
+  const [adjDeleting, setAdjDeleting] = useState(false);
+  // ──────────────────────────────────────────────────────────────────
 
   const fetchBalances = async () => {
     try {
@@ -108,6 +132,19 @@ export default function CurrencyExchange() {
     }
   };
 
+  // Load wallet adjustments for the manager panel
+  const fetchWalletAdjustments = async () => {
+    try {
+      setWalletAdjLoading(true);
+      const res = await getWalletAdjustments();
+      setWalletAdjustments(res.data?.data?.adjustments || res.data?.adjustments || []);
+    } catch {
+      toast.error('Failed to load wallet adjustments');
+    } finally {
+      setWalletAdjLoading(false);
+    }
+  };
+
   useEffect(() => {
     getParties({ limit: 100 })
       .then((res) => setParties(res.data.data?.parties || res.data.data || res.data || []))
@@ -121,6 +158,10 @@ export default function CurrencyExchange() {
   useEffect(() => {
     fetchExchanges();
   }, [page, partyFilter, currencyFilter, startDate, endDate]);
+
+  useEffect(() => {
+    if (showWalletManager) fetchWalletAdjustments();
+  }, [showWalletManager]);
 
   const handleOpenAdd = () => {
     setSelectedExchange(null);
@@ -218,12 +259,84 @@ export default function CurrencyExchange() {
     }
   };
 
+  // ── Wallet Adjustment handlers ─────────────────────────────────────
+  const handleAddAdjustment = async () => {
+    if (!adjAmount || parseFloat(adjAmount) === 0) {
+      toast.error('Enter a non-zero amount (positive to add, negative to subtract)');
+      return;
+    }
+    try {
+      setAdjSaving(true);
+      await createWalletAdjustment({
+        currency: adjCurrency,
+        amount: parseFloat(adjAmount),
+        reason: adjReason,
+        adjustmentDate: adjDate,
+      });
+      toast.success('Wallet adjusted successfully');
+      setAdjAmount('');
+      setAdjReason('');
+      fetchWalletAdjustments();
+      fetchBalances();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to adjust wallet');
+    } finally {
+      setAdjSaving(false);
+    }
+  };
+
+  const handleUpdateAdjustment = async () => {
+    if (!editingAdj) return;
+    try {
+      setAdjSaving(true);
+      await updateWalletAdjustment(editingAdj._id, {
+        amount: parseFloat(editingAdj.amount),
+        reason: editingAdj.reason,
+        adjustmentDate: editingAdj.adjustmentDate,
+      });
+      toast.success('Adjustment updated');
+      setEditingAdj(null);
+      fetchWalletAdjustments();
+      fetchBalances();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to update adjustment');
+    } finally {
+      setAdjSaving(false);
+    }
+  };
+
+  const handleDeleteAdjustment = async () => {
+    if (!adjToDelete) return;
+    try {
+      setAdjDeleting(true);
+      await deleteWalletAdjustment(adjToDelete._id);
+      toast.success('Adjustment deleted');
+      setAdjToDelete(null);
+      fetchWalletAdjustments();
+      fetchBalances();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to delete adjustment');
+    } finally {
+      setAdjDeleting(false);
+    }
+  };
+  // ──────────────────────────────────────────────────────────────────
+
   return (
     <div className="pb-12">
       <TopBar title="Currency Exchange" subtitle="Manage foreign currency holdings, conversions & INR settlements">
-        <button onClick={handleOpenAdd} className="btn-primary flex items-center gap-1.5 text-sm py-2">
-          <Plus size={16} /> Record Exchange
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowWalletManager(!showWalletManager)}
+            className={`btn-secondary flex items-center gap-1.5 text-sm py-2 ${showWalletManager ? 'ring-2 ring-gold-400' : ''}`}
+            title="Edit / adjust wallet balances"
+          >
+            <Settings2 size={15} /> Edit Wallet
+          </button>
+          <button onClick={handleOpenAdd} className="btn-primary flex items-center gap-1.5 text-sm py-2">
+            <Plus size={16} /> Record Exchange
+          </button>
+        </div>
       </TopBar>
 
       <div className="p-6 space-y-6 max-w-7xl mx-auto">
@@ -278,6 +391,188 @@ export default function CurrencyExchange() {
             )}
           </div>
         </div>
+
+        {/* ── Wallet Manager Panel ──────────────────────────────────── */}
+        {showWalletManager && (
+          <div className="card border-2 border-gold-200 bg-gold-50/30">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Settings2 size={16} className="text-gold-600" />
+                <h3 className="text-sm font-bold text-slate-800">Wallet Balance Editor</h3>
+                <span className="text-[11px] text-gray-400">Add manual corrections / opening balances to any currency wallet</span>
+              </div>
+              <button onClick={() => setShowWalletManager(false)} className="text-gray-400 hover:text-gray-600 p-1">
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Add new adjustment form */}
+            <div className="bg-white rounded-lg border border-gold-100 p-4 mb-4">
+              <p className="text-xs font-semibold text-gray-600 mb-3">Add Wallet Adjustment</p>
+              <div className="flex flex-wrap items-end gap-3">
+                <div>
+                  <p className="text-[10px] text-gray-400 mb-1">Currency</p>
+                  <select value={adjCurrency} onChange={e => setAdjCurrency(e.target.value)} className="input text-xs py-1 w-28">
+                    {CURRENCIES.filter(c => c !== 'INR').map(c => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <p className="text-[10px] text-gray-400 mb-1">Amount (+ add, - subtract)</p>
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="e.g. 500 or -200"
+                    value={adjAmount}
+                    onChange={e => setAdjAmount(e.target.value)}
+                    className="input text-xs py-1 w-36 font-mono"
+                  />
+                </div>
+                <div>
+                  <p className="text-[10px] text-gray-400 mb-1">Date</p>
+                  <input type="date" value={adjDate} onChange={e => setAdjDate(e.target.value)} className="input text-xs py-1 w-36" />
+                </div>
+                <div className="flex-1 min-w-[150px]">
+                  <p className="text-[10px] text-gray-400 mb-1">Reason (optional)</p>
+                  <input
+                    type="text"
+                    placeholder="e.g. Opening stock, correction..."
+                    value={adjReason}
+                    onChange={e => setAdjReason(e.target.value)}
+                    className="input text-xs py-1 w-full"
+                  />
+                </div>
+                <button
+                  onClick={handleAddAdjustment}
+                  disabled={adjSaving}
+                  className="btn-primary text-xs py-1.5 px-4 flex items-center gap-1"
+                >
+                  <Plus size={13} /> {adjSaving ? 'Saving...' : 'Add Adjustment'}
+                </button>
+              </div>
+            </div>
+
+            {/* List of existing adjustments */}
+            <div>
+              <p className="text-xs font-semibold text-gray-600 mb-2">Existing Adjustments</p>
+              {walletAdjLoading ? (
+                <div className="text-center py-4"><LoadingSpinner size="sm" className="mx-auto" /></div>
+              ) : walletAdjustments.length === 0 ? (
+                <p className="text-xs text-gray-400 italic py-3 text-center">No wallet adjustments recorded yet.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-gray-400 border-b border-gray-100">
+                        <th className="text-left py-2 px-2">Date</th>
+                        <th className="text-left py-2 px-2">Currency</th>
+                        <th className="text-right py-2 px-2">Amount</th>
+                        <th className="text-left py-2 px-2">Reason</th>
+                        <th className="py-2 px-2 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {walletAdjustments.map(adj => (
+                        <tr key={adj._id} className="hover:bg-white/80">
+                          {editingAdj && editingAdj._id === adj._id ? (
+                            // Inline edit row
+                            <>
+                              <td className="py-1.5 px-2">
+                                <input
+                                  type="date"
+                                  value={editingAdj.adjustmentDate ? editingAdj.adjustmentDate.split('T')[0] : ''}
+                                  onChange={e => setEditingAdj(prev => ({ ...prev, adjustmentDate: e.target.value }))}
+                                  className="input text-xs py-0.5 w-32"
+                                />
+                              </td>
+                              <td className="py-1.5 px-2 font-bold text-slate-700">{adj.currency}</td>
+                              <td className="py-1.5 px-2">
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  value={editingAdj.amount}
+                                  onChange={e => setEditingAdj(prev => ({ ...prev, amount: e.target.value }))}
+                                  className="input text-xs py-0.5 w-28 font-mono text-right"
+                                />
+                              </td>
+                              <td className="py-1.5 px-2">
+                                <input
+                                  type="text"
+                                  value={editingAdj.reason}
+                                  onChange={e => setEditingAdj(prev => ({ ...prev, reason: e.target.value }))}
+                                  className="input text-xs py-0.5 w-full"
+                                  placeholder="Reason..."
+                                />
+                              </td>
+                              <td className="py-1.5 px-2 text-right">
+                                <div className="flex justify-end gap-1">
+                                  <button
+                                    onClick={handleUpdateAdjustment}
+                                    disabled={adjSaving}
+                                    className="p-1 rounded bg-green-50 text-green-600 hover:bg-green-100"
+                                    title="Save"
+                                  >
+                                    <Check size={12} />
+                                  </button>
+                                  <button
+                                    onClick={() => setEditingAdj(null)}
+                                    className="p-1 rounded bg-gray-50 text-gray-500 hover:bg-gray-100"
+                                    title="Cancel"
+                                  >
+                                    <X size={12} />
+                                  </button>
+                                </div>
+                              </td>
+                            </>
+                          ) : (
+                            // Display row
+                            <>
+                              <td className="py-1.5 px-2 text-gray-500">
+                                {adj.adjustmentDate ? new Date(adj.adjustmentDate).toLocaleDateString('en-IN') : '-'}
+                              </td>
+                              <td className="py-1.5 px-2">
+                                <span className="font-bold text-slate-700 px-1.5 py-0.5 bg-gray-100 rounded text-[10px]">{adj.currency}</span>
+                              </td>
+                              <td className={`py-1.5 px-2 text-right font-mono font-bold ${parseFloat(adj.amount) >= 0 ? 'text-green-700' : 'text-red-600'}`}>
+                                {parseFloat(adj.amount) >= 0 ? '+' : ''}{parseFloat(adj.amount).toFixed(2)}
+                              </td>
+                              <td className="py-1.5 px-2 text-gray-500 max-w-xs truncate">{adj.reason || '-'}</td>
+                              <td className="py-1.5 px-2 text-right">
+                                <div className="flex justify-end gap-1">
+                                  <button
+                                    onClick={() => setEditingAdj({
+                                      _id: adj._id,
+                                      amount: adj.amount,
+                                      reason: adj.reason || '',
+                                      adjustmentDate: adj.adjustmentDate,
+                                    })}
+                                    className="p-1 rounded hover:bg-blue-50 text-gray-400 hover:text-blue-600"
+                                    title="Edit"
+                                  >
+                                    <PencilLine size={12} />
+                                  </button>
+                                  <button
+                                    onClick={() => setAdjToDelete(adj)}
+                                    className="p-1 rounded hover:bg-red-50 text-gray-400 hover:text-red-600"
+                                    title="Delete"
+                                  >
+                                    <Trash2 size={12} />
+                                  </button>
+                                </div>
+                              </td>
+                            </>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        {/* ── End Wallet Manager ─────────────────────────────────────── */}
 
         {/* Filters */}
         <div className="card p-4">
@@ -431,7 +726,7 @@ export default function CurrencyExchange() {
                               onClick={() => toggleINRPayments(ex)}
                               className="text-[10px] text-gold-600 hover:underline mt-0.5 flex items-center gap-0.5"
                             >
-                              {expandedExchange === ex._id ? <><ChevronUp size={10}/> Hide</> : <><ChevronDown size={10}/> Installments</>}
+                              {expandedExchange === ex._id ? <><ChevronUp size={10}/>Hide</> : <><ChevronDown size={10}/>Installments</>}
                             </button>
                           </td>
                           <td className="py-3 px-4 text-xs font-mono text-gray-500">
@@ -587,6 +882,18 @@ export default function CurrencyExchange() {
         confirmText="Delete Permanently"
         confirmClassName="btn-danger"
         loading={deleting}
+      />
+
+      {/* Delete Wallet Adjustment Dialog */}
+      <ConfirmDialog
+        isOpen={!!adjToDelete}
+        onClose={() => setAdjToDelete(null)}
+        onConfirm={handleDeleteAdjustment}
+        title="Delete Wallet Adjustment?"
+        message={`Are you sure you want to delete this wallet adjustment of ${adjToDelete?.currency} ${adjToDelete?.amount > 0 ? '+' : ''}${adjToDelete?.amount}? This will affect your wallet balance.`}
+        confirmText="Delete Adjustment"
+        confirmClassName="btn-danger"
+        loading={adjDeleting}
       />
     </div>
   );

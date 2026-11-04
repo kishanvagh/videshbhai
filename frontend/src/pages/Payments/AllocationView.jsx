@@ -21,6 +21,7 @@ export default function AllocationView({ isOpen, onClose, payment, onUpdated }) 
   const [selectedInvoiceId, setSelectedInvoiceId] = useState('');
   const [newAllocAmount, setNewAllocAmount] = useState('');
   const [savingAlloc, setSavingAlloc] = useState(false);
+  const [exchangeRateInput, setExchangeRateInput] = useState('');
 
   const fetchAllocations = async () => {
     if (!payment?._id) return;
@@ -50,13 +51,17 @@ export default function AllocationView({ isOpen, onClose, payment, onUpdated }) 
     0
   );
   const unallocatedBalance = Math.max(0, totalReceived - currentTotalAllocated);
+  const selInvoice = outstandingInvoices.find((i) => i._id === selectedInvoiceId);
 
   const handleOpenAdd = async () => {
     try {
       setIsAdding(true);
+      setExchangeRateInput('');
       const partyId = payment.party?._id || payment.party;
       const res = await getOutstandingByParty(partyId);
-      const list = flattenOutstandingInvoices(res.data.data || res.data || [], currency);
+      // Show invoices in EVERY currency (not just the payment currency) so a
+      // foreign-currency payment can be matched to invoices too.
+      const list = flattenOutstandingInvoices(res.data.data || res.data || [], '');
       setOutstandingInvoices(list);
       if (list.length > 0) {
         setSelectedInvoiceId(list[0]._id);
@@ -81,16 +86,47 @@ export default function AllocationView({ isOpen, onClose, payment, onUpdated }) 
       return;
     }
 
+    const selInvoice = outstandingInvoices.find((i) => i._id === selectedInvoiceId);
+    const isCross = selInvoice && selInvoice.currency && selInvoice.currency !== currency;
+
+    // Cross-currency (payment currency differs from invoice currency) needs a rate.
+    if (isCross) {
+      const rate = parseFloat(exchangeRateInput) || 0;
+      if (rate <= 0) {
+        toast.error(`Enter the exchange rate (1 ${currency} = ? ${selInvoice.currency}) to allocate this payment.`);
+        return;
+      }
+      const settled = amt * rate;
+      if (settled > parseFloat(selInvoice.outstanding) + 0.01) {
+        toast.error(`Converted amount (${formatCurrency(settled, selInvoice.currency)}) exceeds the invoice outstanding (${formatCurrency(selInvoice.outstanding, selInvoice.currency)}).`);
+        return;
+      }
+    }
+
     try {
       setSavingAlloc(true);
-      await createAllocation({
-        payment: payment._id,
-        sale: selectedInvoiceId,
-        allocatedAmount: amt,
-      });
+      if (isCross) {
+        const rate = parseFloat(exchangeRateInput) || 0;
+        await createAllocation({
+          payment: payment._id,
+          sale: selectedInvoiceId,
+          allocatedAmount: amt,
+          isCrossCurrency: true,
+          exchangeRateUsed: rate,
+          settlementAmountInSaleCurrency: Math.round((amt * rate + Number.EPSILON) * 100) / 100,
+          notes: `1 ${currency} = ${rate} ${selInvoice.currency}`,
+        });
+      } else {
+        await createAllocation({
+          payment: payment._id,
+          sale: selectedInvoiceId,
+          allocatedAmount: amt,
+        });
+      }
       toast.success('Allocation added successfully');
       setIsAdding(false);
       setNewAllocAmount('');
+      setExchangeRateInput('');
       fetchAllocations();
       if (onUpdated) onUpdated();
     } catch (err) {
@@ -171,6 +207,7 @@ export default function AllocationView({ isOpen, onClose, payment, onUpdated }) 
                     value={selectedInvoiceId}
                     onChange={(e) => {
                       setSelectedInvoiceId(e.target.value);
+                      setExchangeRateInput('');
                       const inv = outstandingInvoices.find((i) => i._id === e.target.value);
                       if (inv) {
                         const maxCan = Math.min(unallocatedBalance, parseFloat(inv.outstanding) || 0);
@@ -180,7 +217,7 @@ export default function AllocationView({ isOpen, onClose, payment, onUpdated }) 
                   >
                     {outstandingInvoices.map((inv) => (
                       <option key={inv._id} value={inv._id}>
-                        {inv.invoiceNumber} — {formatCurrency(inv.outstanding, currency)} pending ({inv.productName})
+                        {inv.invoiceNumber} — {formatCurrency(inv.outstanding, inv.currency)} {inv.currency} pending ({inv.productName})
                       </option>
                     ))}
                   </select>
@@ -199,6 +236,34 @@ export default function AllocationView({ isOpen, onClose, payment, onUpdated }) 
                   />
                 </div>
               </div>
+
+              {selInvoice && selInvoice.currency && selInvoice.currency !== currency && (
+                <div className="p-3 rounded-lg border border-amber-200 bg-amber-50/50 space-y-2">
+                  <p className="text-xs font-semibold text-amber-800">
+                    Cross-currency: this invoice is in <b>{selInvoice.currency}</b> but the payment is in <b>{currency}</b>.
+                    Enter how many {selInvoice.currency} equals 1 {currency}.
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <label className="label text-xs mb-0">1 {currency} =</label>
+                    <input
+                      type="number"
+                      step="0.0001"
+                      min="0"
+                      placeholder="e.g. 1.12"
+                      className="input font-semibold w-32"
+                      value={exchangeRateInput}
+                      onChange={(e) => setExchangeRateInput(e.target.value)}
+                    />
+                    <span className="text-xs text-gray-600">{selInvoice.currency}</span>
+                  </div>
+                  {parseFloat(exchangeRateInput) > 0 && parseFloat(newAllocAmount) > 0 && (
+                    <p className="text-xs text-amber-800">
+                      This reduces the {selInvoice.currency} invoice by{' '}
+                      <span className="font-bold">{formatCurrency(parseFloat(newAllocAmount) * parseFloat(exchangeRateInput), selInvoice.currency)}</span>.
+                    </p>
+                  )}
+                </div>
+              )}
 
               <div className="flex justify-end gap-2 pt-1">
                 <button

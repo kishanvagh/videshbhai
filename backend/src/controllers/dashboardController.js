@@ -35,77 +35,100 @@ const getPartyTable = async (req, res, next) => {
     if (req.query.search) filter.name = { $regex: req.query.search, $options: 'i' };
 
     const parties = await Party.find(filter).select('name country preferredCurrency email phone');
+    const partyIds = parties.map(p => p._id);
+    if (parties.length === 0) return success(res, { rows: [], total: 0 });
+
+    // Batched balances for ALL parties (avoids the previous N+1 query loop)
+    const balMap = await accountingService.getAllPartyBalances(userId, partyIds);
+
+    // All non-cancelled sales for all parties (single query)
+    const allSales = await Sale.find({
+      user: userObjectId,
+      party: { $in: partyIds },
+      status: { $ne: 'cancelled' }
+    }).select('party saleDate saleAmountINR saleAmountForeign estimatedProfitINR estimatedProfitForeign foreignCurrency');
+
+    // All non-reversed payments for all parties (single query)
+    const allPayments = await Payment.find({
+      user: userObjectId,
+      party: { $in: partyIds },
+      isReversed: false
+    }).select('party paymentDate');
+
+    const key = (id) => String(id);
+    const salesPerParty = {};
+    const latestSalePerParty = {};
+    const latestPaymentPerParty = {};
+    partyIds.forEach(pid => { salesPerParty[key(pid)] = []; });
+
+    allSales.forEach(s => {
+      const k = key(s.party);
+      if (!salesPerParty[k]) return;
+      salesPerParty[k].push(s);
+      const d = s.saleDate;
+      if (!latestSalePerParty[k] || d > latestSalePerParty[k]) latestSalePerParty[k] = d;
+    });
+    allPayments.forEach(p => {
+      const k = key(p.party);
+      const d = p.paymentDate;
+      if (!latestPaymentPerParty[k] || d > latestPaymentPerParty[k]) latestPaymentPerParty[k] = d;
+    });
 
     const rows = [];
     for (const party of parties) {
-      const balances = await accountingService.getPartyBalances(userId, party._id);
+      const k = key(party._id);
+      const balances = balMap[k] || [];
+      const partySales = salesPerParty[k] || [];
 
-      const sales = await Sale.find({ user: userObjectId, party: party._id, status: { $ne: 'cancelled' } })
-        .sort({ saleDate: -1 }).limit(1).select('saleDate');
-
-      const payments = await Payment.find({ user: userObjectId, party: party._id, isReversed: false })
-        .sort({ paymentDate: -1 }).limit(1).select('paymentDate');
-
-      const lastSaleDate = sales.length ? sales[0].saleDate : null;
-      const lastPaymentDate = payments.length ? payments[0].paymentDate : null;
+      const lastSaleDate = latestSalePerParty[k] || null;
+      const lastPaymentDate = latestPaymentPerParty[k] || null;
       const lastTransaction = lastSaleDate && lastPaymentDate
         ? (lastSaleDate > lastPaymentDate ? lastSaleDate : lastPaymentDate)
         : (lastSaleDate || lastPaymentDate);
 
-      const totalSalesINR = await Sale.aggregate([
-        { $match: { user: userObjectId, party: party._id, status: { $ne: 'cancelled' } } },
-        { $group: { _id: null, total: { $sum: '$saleAmountINR' }, profit: { $sum: '$estimatedProfitINR' } } }
-      ]);
-      const totalSalesINRVal = totalSalesINR.length ? decimal.round2(totalSalesINR[0].total) : 0;
-      const profitINR = totalSalesINR.length ? decimal.round2(totalSalesINR[0].profit) : 0;
-
-      // Per-currency profit breakdown (e.g. USD profit) for dual-currency display
-      const profitByCurrencyAgg = await Sale.aggregate([
-        { $match: { user: userObjectId, party: party._id, status: { $ne: 'cancelled' } } },
-        {
-          $group: {
-            _id: '$foreignCurrency',
-            profitINR: { $sum: '$estimatedProfitINR' },
-            profitForeign: { $sum: '$estimatedProfitForeign' }
-          }
-        }
-      ]);
-      const profitByCurrency = {};
+      let totalSalesINR = 0;
+      let profitINR = 0;
       let totalProfitUSD = 0;
-      profitByCurrencyAgg.forEach(g => {
-        profitByCurrency[g._id || 'INR'] = {
-          profitINR: decimal.round2(g.profitINR || 0),
-          profitForeign: decimal.round2(g.profitForeign || 0)
-        };
-        if ((g._id || 'INR') !== 'INR') {
-          totalProfitUSD = decimal.add(totalProfitUSD, g.profitForeign || 0);
-        }
+      const profitByCurrency = {};
+      partySales.forEach(s => {
+        totalSalesINR = decimal.add(totalSalesINR, s.saleAmountINR);
+        profitINR = decimal.add(profitINR, s.estimatedProfitINR);
+        const c = s.foreignCurrency || 'INR';
+        profitByCurrency[c] = profitByCurrency[c] || { profitINR: 0, profitForeign: 0 };
+        profitByCurrency[c].profitINR = decimal.add(profitByCurrency[c].profitINR, s.estimatedProfitINR || 0);
+        profitByCurrency[c].profitForeign = decimal.add(profitByCurrency[c].profitForeign, s.estimatedProfitForeign || 0);
+        if (c !== 'INR') totalProfitUSD = decimal.add(totalProfitUSD, s.estimatedProfitForeign || 0);
       });
+      totalSalesINR = decimal.round2(totalSalesINR);
+      profitINR = decimal.round2(profitINR);
       totalProfitUSD = decimal.round2(totalProfitUSD);
+      const profitByCurrencyFinal = {};
+      Object.keys(profitByCurrency).forEach(c => {
+        profitByCurrencyFinal[c] = {
+          profitINR: decimal.round2(profitByCurrency[c].profitINR),
+          profitForeign: decimal.round2(profitByCurrency[c].profitForeign)
+        };
+      });
 
-      // hasOutstanding
       const hasOutstanding = balances.some(b => b.outstanding > 0.01);
 
       if (req.query.status === 'outstanding' && !hasOutstanding) continue;
       if (req.query.status === 'settled' && hasOutstanding) continue;
 
-      // Add INR received / outstanding / profit convenience fields
       let outstandingINR = 0;
-      balances.forEach(b => {
-        if (b.currency === 'INR') outstandingINR = decimal.add(outstandingINR, b.outstanding);
-      });
-      const receivedINR = Math.max(0, decimal.round2(decimal.subtract(totalSalesINRVal, outstandingINR)));
+      balances.forEach(b => { if (b.currency === 'INR') outstandingINR = decimal.add(outstandingINR, b.outstanding); });
+      const receivedINR = Math.max(0, decimal.round2(decimal.subtract(totalSalesINR, outstandingINR)));
 
       rows.push({
         party: { _id: party._id, name: party.name, country: party.country, preferredCurrency: party.preferredCurrency },
         balances,
-        totalSalesINR: totalSalesINRVal,
+        totalSalesINR,
         totalReceivedINR: decimal.round2(receivedINR),
         outstandingINR: decimal.round2(outstandingINR),
         totalProfitINR: profitINR,
         totalProfitUSD,
         estimatedProfitINR: profitINR,
-        profitByCurrency,
+        profitByCurrency: profitByCurrencyFinal,
         lastTransaction,
         lastTransactionDate: lastTransaction,
         status: hasOutstanding ? 'partial' : 'settled',

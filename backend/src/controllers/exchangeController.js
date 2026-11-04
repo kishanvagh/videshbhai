@@ -15,7 +15,19 @@ const getExchanges = async (req, res, next) => {
 
     const filter = { user: req.user.id };
     if (req.query.currency) filter.foreignCurrency = req.query.currency;
-    if (req.query.party) filter.party = req.query.party;
+    // An exchange can be linked to a party either by its ObjectId (`party`) or by
+    // the exchange party's name (`exchangePartyName`). When both are provided,
+    // match either so that both newly-linked and legacy/exchange-party records show up.
+    if (req.query.party && req.query.exchangePartyName) {
+      filter.$or = [
+        { party: req.query.party },
+        { exchangePartyName: { $regex: req.query.exchangePartyName, $options: 'i' } }
+      ];
+    } else if (req.query.party) {
+      filter.party = req.query.party;
+    } else if (req.query.exchangePartyName) {
+      filter.exchangePartyName = { $regex: req.query.exchangePartyName, $options: 'i' };
+    }
     if (req.query.isReversed !== undefined) filter.isReversed = req.query.isReversed === 'true';
     if (req.query.startDate || req.query.endDate) {
       filter.exchangeDate = {};
