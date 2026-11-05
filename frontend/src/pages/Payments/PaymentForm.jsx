@@ -21,7 +21,7 @@ const paymentSchema = z.object({
   notes: z.string().optional(),
 });
 
-export default function PaymentForm({ isOpen, onClose, onSuccess, initialPartyId, initialCurrency }) {
+export default function PaymentForm({ isOpen, onClose, onSuccess, initialPartyId, initialCurrency, initialSaleId }) {
   const [parties, setParties] = useState([]);
   const [loadingParties, setLoadingParties] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -29,6 +29,8 @@ export default function PaymentForm({ isOpen, onClose, onSuccess, initialPartyId
   const [invoices, setInvoices] = useState([]);
   const [targetCurrency, setTargetCurrency] = useState('');
   const [exchangeRateInput, setExchangeRateInput] = useState('');
+  // The specific invoice this payment should be pinned to (from outstanding table row)
+  const [pinnedInvoice, setPinnedInvoice] = useState(null);
 
   const {
     register,
@@ -70,6 +72,8 @@ export default function PaymentForm({ isOpen, onClose, onSuccess, initialPartyId
         referenceNumber: '',
         notes: '',
       });
+      setPinnedInvoice(null);
+      setExchangeRateInput('');
     }
   }, [isOpen, initialPartyId, initialCurrency, reset]);
 
@@ -79,6 +83,7 @@ export default function PaymentForm({ isOpen, onClose, onSuccess, initialPartyId
   const amountReceivedVal = parseFloat(watch('amountReceived') || 0);
 
   useEffect(() => {
+    if (!isOpen) return; // don't fetch when modal is closed
     if (selectedParty) {
       getPartyBalances(selectedParty)
         .then(res => {
@@ -104,21 +109,33 @@ export default function PaymentForm({ isOpen, onClose, onSuccess, initialPartyId
               outstanding,
             };
           });
-          setInvoices(flat.filter((i) => i._id && i.outstanding > 0));
+          const filtered = flat.filter((i) => i._id && i.outstanding > 0);
+          setInvoices(filtered);
+
+          // If a specific sale was requested (from outstanding table row), pin to it
+          if (initialSaleId) {
+            const pinned = filtered.find(i => String(i._id) === String(initialSaleId));
+            setPinnedInvoice(pinned || null);
+          } else {
+            setPinnedInvoice(null);
+          }
         })
         .catch(() => setInvoices([]));
     } else {
       setPartyOutstanding(null);
       setInvoices([]);
+      setPinnedInvoice(null);
     }
-  }, [selectedParty]);
+  }, [isOpen, selectedParty, initialSaleId]); // eslint-disable-line
 
   // Distinct currencies with outstanding dues, excluding the payment currency.
   const otherCurrencies = [...new Set(
     invoices.filter((i) => i.currency !== payCurrency && i.outstanding > 0).map((i) => i.currency)
   )];
   const sameCurrencyInvoices = invoices.filter((i) => i.currency === payCurrency && i.outstanding > 0);
-  const crossAvailable = otherCurrencies.length > 0;
+  // Cross-currency is only relevant when there's NO same-currency invoice and no pinned invoice in pay currency
+  const noPinnedOrSameCurrency = !pinnedInvoice || pinnedInvoice.currency !== payCurrency;
+  const crossAvailable = otherCurrencies.length > 0 && sameCurrencyInvoices.length === 0 && noPinnedOrSameCurrency;
 
   // Default the "reduce due in" currency to the other currency with the largest outstanding.
   useEffect(() => {
@@ -142,43 +159,67 @@ export default function PaymentForm({ isOpen, onClose, onSuccess, initialPartyId
       const numericAmount = parseFloat(data.amountReceived) || 0;
       const rate = parseFloat(exchangeRateInput) || 0;
       const allocations = [];
-      // Pay toward invoices in another currency? Then a manual exchange rate is
-      // required and the converted amount reduces the party's due.
-      const targetCurr = (crossAvailable && targetCurrency && targetCurrency !== data.currency) ? targetCurrency : null;
 
-      if (targetCurr && rate > 0) {
-        const targetInvoices = invoices
-          .filter((i) => i.currency === targetCurr && i.outstanding > 0)
-          .sort((a, b) => new Date(a.saleDate) - new Date(b.saleDate));
-        let remainingSettlement = numericAmount * rate; // in target (invoice) currency
-        for (const inv of targetInvoices) {
-          if (remainingSettlement <= 0.001) break;
-          const settled = Math.min(inv.outstanding, remainingSettlement);
-          if (settled <= 0.001) continue;
-          allocations.push({
-            sale: inv._id,
-            allocatedAmount: round2(settled / rate),
-            isCrossCurrency: true,
-            exchangeRateUsed: rate,
-            settlementAmountInSaleCurrency: round2(settled),
-          });
-          remainingSettlement -= settled;
+      if (pinnedInvoice) {
+        // Bug Fix #2: Payment is pinned to a specific invoice
+        if (pinnedInvoice.currency === data.currency) {
+          // Same currency — direct allocation
+          const alloc = round2(Math.min(pinnedInvoice.outstanding, numericAmount));
+          if (alloc > 0) {
+            allocations.push({
+              sale: pinnedInvoice._id,
+              allocatedAmount: alloc,
+            });
+          }
+        } else if (rate > 0) {
+          // Cross-currency allocation for pinned invoice
+          const settledInInvoiceCurrency = round2(numericAmount * rate);
+          const alloc = round2(Math.min(pinnedInvoice.outstanding, settledInInvoiceCurrency));
+          if (alloc > 0) {
+            allocations.push({
+              sale: pinnedInvoice._id,
+              allocatedAmount: round2(alloc / rate),
+              isCrossCurrency: true,
+              exchangeRateUsed: rate,
+              settlementAmountInSaleCurrency: alloc,
+            });
+          }
         }
+        // If no rate provided for cross-currency pinned invoice, it falls through as advance (wallet still increases)
+      } else {
+        // No specific invoice pinned — apply cross-currency logic if applicable
+        const targetCurr = (crossAvailable && targetCurrency && targetCurrency !== data.currency) ? targetCurrency : null;
 
-        // Guard against rounding drift pushing the total allocation above the payment amount.
-        const allocTotal = allocations.reduce((s, a) => s + a.allocatedAmount, 0);
-        if (allocTotal > numericAmount + 0.0001 && allocations.length > 0) {
-          const diff = allocTotal - numericAmount;
-          const last = allocations[allocations.length - 1];
-          last.allocatedAmount = round2(Math.max(0, last.allocatedAmount - diff));
+        if (targetCurr && rate > 0) {
+          const targetInvoices = invoices
+            .filter((i) => i.currency === targetCurr && i.outstanding > 0)
+            .sort((a, b) => new Date(a.saleDate) - new Date(b.saleDate));
+          let remainingSettlement = numericAmount * rate; // in target (invoice) currency
+          for (const inv of targetInvoices) {
+            if (remainingSettlement <= 0.001) break;
+            const settled = Math.min(inv.outstanding, remainingSettlement);
+            if (settled <= 0.001) continue;
+            allocations.push({
+              sale: inv._id,
+              allocatedAmount: round2(settled / rate),
+              isCrossCurrency: true,
+              exchangeRateUsed: rate,
+              settlementAmountInSaleCurrency: round2(settled),
+            });
+            remainingSettlement -= settled;
+          }
+
+          // Guard against rounding drift pushing the total allocation above the payment amount.
+          const allocTotal = allocations.reduce((s, a) => s + a.allocatedAmount, 0);
+          if (allocTotal > numericAmount + 0.0001 && allocations.length > 0) {
+            const diff = allocTotal - numericAmount;
+            const last = allocations[allocations.length - 1];
+            last.allocatedAmount = round2(Math.max(0, last.allocatedAmount - diff));
+          }
         }
-      } else if (sameCurrencyInvoices.length === 0 && crossAvailable && numericAmount > 0) {
-        toast.error(
-          `This payment is in ${data.currency} but the party's dues are in ${otherCurrencies.join(', ')}. ` +
-          `Enter the exchange rate (1 ${data.currency} = ? ${targetCurrency}) to apply it to the due.`
-        );
-        setSubmitting(false);
-        return;
+        // Bug Fix #1: If crossAvailable but no rate entered, just submit without allocations.
+        // Backend will record the payment as advance → wallet balance increases correctly.
+        // (Removed the previous error that blocked submission in this case.)
       }
 
       const payload = {
@@ -257,12 +298,27 @@ export default function PaymentForm({ isOpen, onClose, onSuccess, initialPartyId
             {errors.amountReceived && <p className="text-red-500 text-xs mt-1">{errors.amountReceived.message}</p>}
           </div>
 
-          {/* Cross-currency payment: party's due is in another currency */}
-          {crossAvailable && (
+          {/* Pinned invoice info (Bug Fix #2) */}
+          {pinnedInvoice && (
+            <div className="p-3 rounded-lg border border-green-200 bg-green-50/50 space-y-1">
+              <p className="text-xs font-semibold text-green-800">
+                📌 Payment will be applied to invoice: <span className="font-mono">{pinnedInvoice.invoiceNumber}</span>
+              </p>
+              <p className="text-xs text-green-700">
+                Outstanding: <span className="font-bold">{formatCurrency(pinnedInvoice.outstanding, pinnedInvoice.currency)}</span>
+                {pinnedInvoice.currency !== payCurrency && (
+                  <span className="ml-2 text-amber-700">(different currency — enter rate below to allocate)</span>
+                )}
+              </p>
+            </div>
+          )}
+
+          {/* Cross-currency payment: party's due is in another currency (only shown when no pinned invoice) */}
+          {!pinnedInvoice && crossAvailable && (
             <div className="p-3 rounded-lg border border-blue-200 bg-blue-50/50 space-y-3">
               <p className="text-xs font-semibold text-blue-800">
-                ⚠️ This party's due is in {otherCurrencies.join(', ')} but you're recording a {payCurrency} payment.
-                Enter the exchange rate so the payment reduces the due.
+                ℹ️ This party's dues are in {otherCurrencies.join(', ')} but you're recording a {payCurrency} payment.
+                Optionally enter the exchange rate to reduce the due, or leave blank to record as advance.
               </p>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -278,7 +334,7 @@ export default function PaymentForm({ isOpen, onClose, onSuccess, initialPartyId
                   </select>
                 </div>
                 <div>
-                  <label className="label">1 {payCurrency} = ? {targetCurrency}</label>
+                  <label className="label">1 {payCurrency} = ? {targetCurrency} (optional)</label>
                   <input
                     type="number"
                     step="0.0001"
@@ -294,6 +350,39 @@ export default function PaymentForm({ isOpen, onClose, onSuccess, initialPartyId
                 <p className="text-xs text-blue-700">
                   {formatCurrency(amountReceivedVal, payCurrency)} at 1 {payCurrency} = {parseFloat(exchangeRateInput)} {targetCurrency} reduces the {targetCurrency} due by{' '}
                   <span className="font-bold">{formatCurrency(amountReceivedVal * parseFloat(exchangeRateInput), targetCurrency)}</span>.
+                </p>
+              )}
+              {(!exchangeRateInput || parseFloat(exchangeRateInput) <= 0) && (
+                <p className="text-xs text-gray-500 italic">
+                  No rate entered — payment will be recorded as advance in {payCurrency} wallet.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Cross-currency for pinned invoice in different currency */}
+          {pinnedInvoice && pinnedInvoice.currency !== payCurrency && (
+            <div className="p-3 rounded-lg border border-amber-200 bg-amber-50/50 space-y-2">
+              <p className="text-xs font-semibold text-amber-800">
+                Exchange rate needed to allocate {payCurrency} payment to {pinnedInvoice.currency} invoice.
+                Leave blank to record as {payCurrency} advance.
+              </p>
+              <div>
+                <label className="label">1 {payCurrency} = ? {pinnedInvoice.currency} (optional)</label>
+                <input
+                  type="number"
+                  step="0.0001"
+                  min="0"
+                  placeholder="e.g. 1.12"
+                  className="input font-semibold"
+                  value={exchangeRateInput}
+                  onChange={(e) => setExchangeRateInput(e.target.value)}
+                />
+              </div>
+              {amountReceivedVal > 0 && parseFloat(exchangeRateInput) > 0 && (
+                <p className="text-xs text-amber-700">
+                  {formatCurrency(amountReceivedVal, payCurrency)} → reduces {pinnedInvoice.currency} due by{' '}
+                  <span className="font-bold">{formatCurrency(round2(amountReceivedVal * parseFloat(exchangeRateInput)), pinnedInvoice.currency)}</span>
                 </p>
               )}
             </div>

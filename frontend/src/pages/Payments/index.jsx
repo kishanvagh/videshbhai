@@ -53,6 +53,7 @@ export default function Payments() {
   const [isPaymentFormOpen, setIsPaymentFormOpen] = useState(false);
   const [prefillParty, setPrefillParty] = useState('');
   const [prefillCurrency, setPrefillCurrency] = useState('');
+  const [prefillSaleId, setPrefillSaleId] = useState('');
   const [selectedPaymentForAlloc, setSelectedPaymentForAlloc] = useState(null);
   const [paymentToReverse, setPaymentToReverse] = useState(null);
   const [reversing, setReversing] = useState(false);
@@ -96,6 +97,7 @@ export default function Payments() {
         return {
           party,
           partyId: party?._id || sale._id || idx,
+          saleId: sale._id || null,
           currency: cur,
           totalInvoiced: invoiced,
           totalSales: invoiced,
@@ -161,9 +163,10 @@ export default function Payments() {
     else fetchPaymentsHistory();
   };
 
-  const handleOpenRecordPayment = (partyId = '', currency = 'USD') => {
+  const handleOpenRecordPayment = (partyId = '', currency = 'USD', saleId = '') => {
     setPrefillParty(partyId);
     setPrefillCurrency(currency);
+    setPrefillSaleId(saleId);
     setIsPaymentFormOpen(true);
   };
 
@@ -392,7 +395,7 @@ export default function Payments() {
                           </td>
                           <td className="py-3 px-4 text-right">
                             <button
-                              onClick={() => handleOpenRecordPayment(partyId, cur)}
+                              onClick={() => handleOpenRecordPayment(partyId, cur, row.saleId || '')}
                               className="text-xs font-semibold px-3 py-1.5 bg-gold-500 hover:bg-gold-600 text-white rounded-lg transition-colors"
                             >
                               Record Payment
@@ -546,6 +549,7 @@ export default function Payments() {
         onClose={() => setIsPaymentFormOpen(false)}
         initialPartyId={prefillParty}
         initialCurrency={prefillCurrency}
+        initialSaleId={prefillSaleId}
         onSuccess={() => {
           if (activeTab === 'outstanding') fetchOutstandingBalances();
           else fetchPaymentsHistory();

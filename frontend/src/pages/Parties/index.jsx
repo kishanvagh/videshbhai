@@ -20,6 +20,7 @@ function PartyTable({ parties, onEdit, onDelete }) {
         <thead>
           <tr className="border-b border-gray-100">
             <th className="text-left py-3 px-4 font-semibold text-gray-600">Party Name</th>
+            <th className="text-left py-3 px-4 font-semibold text-gray-600">Type</th>
             <th className="text-left py-3 px-4 font-semibold text-gray-600">Country</th>
             <th className="text-left py-3 px-4 font-semibold text-gray-600">Contact</th>
             <th className="text-left py-3 px-4 font-semibold text-gray-600">Email</th>
@@ -38,6 +39,17 @@ function PartyTable({ parties, onEdit, onDelete }) {
                   </div>
                   <span className="font-medium text-slate-800">{party.name}</span>
                 </div>
+              </td>
+              <td className="py-3 px-4">
+                {party.partyType === 'exchange' ? (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-50 text-purple-700">
+                    Exchange
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gold-50 text-gold-700">
+                    Sales
+                  </span>
+                )}
               </td>
               <td className="py-3 px-4 text-gray-600">{party.country}</td>
               <td className="py-3 px-4 text-gray-600">{party.contactPerson || '-'}</td>
